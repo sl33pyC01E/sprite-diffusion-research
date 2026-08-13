@@ -40,6 +40,12 @@ from .flow import (
     rectified_flow_mse,
     sample_rectified_flow_batch,
 )
+from .latent_still_dit import (
+    LatentStillDiT,
+    LatentStillDiTConfig,
+    MissingLatentStillTorchError,
+    validate_latent_still_shapes,
+)
 from .pixeldit import (
     FactorizedSpriteDiT,
     MissingTorchError,
@@ -72,8 +78,11 @@ __all__ = [
     "EncodedConditionBatch",
     "FactorizedSpriteDiT",
     "GenerationConditionLike",
+    "LatentStillDiT",
+    "LatentStillDiTConfig",
     "MissingConditioningTorchError",
     "MissingFlowTorchError",
+    "MissingLatentStillTorchError",
     "MissingTorchError",
     "MissingSpriteAutoencoderTorchError",
     "PatchGrid",
@@ -99,6 +108,7 @@ __all__ = [
     "torch_available",
     "validate_conditioning_shape",
     "validate_identity_action_groups",
+    "validate_latent_still_shapes",
     "validate_model_input_shapes",
     "validate_phase_shape",
     "validate_video_shape",
