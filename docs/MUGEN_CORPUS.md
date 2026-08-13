@@ -212,3 +212,24 @@ augmentation, EMA, rectified-flow training, and matched endpoint supervision.
 Held-out evaluation remains identity-disjoint and will not be described as text
 generalization unless the untouched split and prompt controls support that
 claim.
+
+## Structured combat action evidence
+
+`spritelab.adapters.mugen_logic` adds a static, non-executing CNS evidence parser.
+It reads only literal `Statedef` facts and literal `HitDef` fields; triggers,
+expressions, controllers, and character code are never evaluated. Elecbyte's action
+number recommendations provide broad `normal_attack`, `special_attack`, and
+`super_attack` tiers plus reserved locomotion/guard/state verbs. Literal HitDef
+`attr` can corroborate normal/special/super and distinguish projectile or throw;
+literal `animtype` can supply light/medium/heavy. AIR comments can supply explicit
+punch/kick/weapon/projectile/throw vocabulary. Conflicting claims remain unresolved
+rather than letting the last claim win.
+
+The first materialization-wide taxonomy intentionally uses only facts already in the
+combined manifest: source action number and retained source meaning. It does not yet
+claim light/medium/heavy or attack form, because CNS/AIR evidence has not been joined
+across the full acquired collection. This is a deliberate data-format boundary, not
+an inference gap hidden by a default. The canonical report lives at
+`data/index/reports/mugen-mffa-action-taxonomy-v1.json`; its own hash is recorded
+after generation. The later CNS/AIR join must retain source archive/member hashes,
+literal line evidence, and ambiguity instead of replacing this coarse projection.

@@ -111,5 +111,7 @@ def test_tiny_cpu_training_publishes_hash_bound_bundle(
     }
     assert result.checkpoint_path.is_file()
     assert len(result.checkpoint_sha256) == len(result.report_sha256) == 64
+    checkpoint = torch.load(result.checkpoint_path, map_location="cpu", weights_only=True)
+    assert checkpoint["runtime"]["torch"] == str(torch.__version__)
     with pytest.raises(FileExistsError, match="replace"):
         run_autoencoder_training("fixture.json", tmp_path / "run", config=config)

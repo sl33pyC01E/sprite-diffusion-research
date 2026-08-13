@@ -448,7 +448,11 @@ def _write_checkpoint(
             sampler.bit_generator.state, separators=(",", ":"), sort_keys=True
         ),
         "optimizer": optimizer.state_dict(),
-        "runtime": {"torch": runtime.__version__},
+        # ``torch.__version__`` is a ``TorchVersion`` wrapper in recent PyTorch
+        # releases.  Serializing the wrapper makes an otherwise tensor-only
+        # checkpoint fail the default ``weights_only=True`` loader.  Persist
+        # plain text so checkpoints remain safely portable.
+        "runtime": {"torch": str(runtime.__version__)},
         "schema_version": 1,
         "step": step,
         "torch_cpu_rng_state": runtime.get_rng_state(),

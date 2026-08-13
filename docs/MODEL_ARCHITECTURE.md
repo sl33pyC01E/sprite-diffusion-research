@@ -43,15 +43,15 @@ direct endpoint objectives, tracks EMA weights, uses fixed validation noise, and
 publishes immutable periodic resume checkpoints. It still does **not** include a
 reference-image encoder or a production serving stack.
 
-## Why native pixel space
+## Superseded initial native-pixel decision
 
 Ordinary latent video diffusion is optimized for hundreds of pixels and natural
 motion. Its spatial/temporal VAE can merge one-pixel details, soften alpha boundaries,
 or interpolate poses that should remain discrete. At 64×64, the compute saved by a
 VAE is less compelling, while reconstruction loss is proportionally more damaging.
 
-The scaffold therefore predicts the flow/noise target directly over premultiplied
-RGBA. This follows the motivation of
+The first scaffold predicted the flow/noise target directly over premultiplied
+RGBA. This followed the motivation of
 [PixelDiT](https://github.com/NVlabs/PixelDiT), whose patch-level and pixel-level
 design avoids a fixed lossy autoencoder. The temporal factorization follows the
 general design space explored by [Latte](https://github.com/Vchitect/Latte).
@@ -60,8 +60,48 @@ This does not assert that a custom DiT will beat a pretrained U-Net immediately.
 recommended experimental baseline remains an image-first, reference-conditioned
 animator based on the staged result in
 [Sprite Sheet Diffusion](https://arxiv.org/html/2412.03685v2) and the temporal-module
-strategy in [AnimateDiff](https://github.com/guoyww/AnimateDiff). The native model is
-the controlled research target after that baseline.
+strategy in [AnimateDiff](https://github.com/guoyww/AnimateDiff). The direct-pixel
+MUGEN run later demonstrated that this choice is not the quality path at 128x128x8:
+ordinary validation flow improved while direct endpoint validation plateaued and
+held-out samples remained noisy. That result supersedes the initial preference.
+
+## Quality-first latent two-stage architecture (2026-08-13)
+
+The active design separates appearance generation from motion:
+
+1. detailed visual text generates one canonical RGBA sprite still;
+2. the still, structured action tuple, and optional motion text generate latent
+   animation residuals; and
+3. the frozen sprite decoder reconstructs all ordered RGBA frames.
+
+The active custom codec uses continuous 32x32x16 latents for 128x128 RGBA inputs,
+a 4x spatial reduction, nearest-neighbor decoder upsampling, and separate RGB/alpha
+reconstruction terms. It is accepted only through fixed identity-disjoint visual and
+numeric reconstruction audits. At step 5,000, the first matched 16-identity audit
+reports premultiplied-RGBA MAE `0.003906`, visible-RGB MAE `0.031343`, alpha IoU at
+127 `0.998888`, and report SHA-256
+`6e9dfbec40f3d2598810b4e7a643d579bf334d93c6a71d5cd4c38a4db3a8b0d2`.
+The gallery is materially sharper than step 2,500 but still visibly softer than its
+targets, so a 2x-codec A/B remains required before freezing the production latent
+contract.
+
+The still-image experiment has two matched branches. The primary research branch is
+a compact latent DiT trained from scratch over the custom RGBA codec, with a frozen
+pretrained text encoder. A quality-control branch adapts Stable Diffusion v1 with
+LoRA on the identical canonical stills, detailed captions, and identity-disjoint
+splits. Stable Diffusion v1 is practical because its official architecture uses an
+8x autoencoder, an 860M-parameter U-Net, and CLIP ViT-L/14; the pretrained branch is
+RGB, so it must use a separately declared background/mask contract and cannot be
+silently treated as native RGBA. PixArt's official 0.6B 256px DiT is a later
+architecturally aligned control. Sana is not the first sprite control because its
+official 32x compression is hostile to one-pixel fidelity.
+
+The temporal model remains project-owned: a compact latent DiT consumes reference
+appearance tokens, action fields `(verb, tier, strength, form, stance, direction,
+phase)`, and per-frame phase. It predicts motion/residual latents rather than asking
+one model to invent identity and movement simultaneously. Generic labels such as
+`attack` remain available, but evidence-backed MUGEN labels such as `normal_attack`,
+`special_attack`, `super_attack`, and `block` are the intended steering interface.
 
 ## Public tensor contract
 
