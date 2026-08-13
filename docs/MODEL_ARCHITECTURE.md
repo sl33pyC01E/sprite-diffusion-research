@@ -74,16 +74,18 @@ The active design separates appearance generation from motion:
    animation residuals; and
 3. the frozen sprite decoder reconstructs all ordered RGBA frames.
 
-The active custom codec uses continuous 32x32x16 latents for 128x128 RGBA inputs,
-a 4x spatial reduction, nearest-neighbor decoder upsampling, and separate RGB/alpha
-reconstruction terms. It is accepted only through fixed identity-disjoint visual and
-numeric reconstruction audits. At step 5,000, the first matched 16-identity audit
-reports premultiplied-RGBA MAE `0.003906`, visible-RGB MAE `0.031343`, alpha IoU at
-127 `0.998888`, and report SHA-256
-`6e9dfbec40f3d2598810b4e7a643d579bf334d93c6a71d5cd4c38a4db3a8b0d2`.
-The gallery is materially sharper than step 2,500 but still visibly softer than its
-targets, so a 2x-codec A/B remains required before freezing the production latent
-contract.
+The selected quality-first custom codec uses continuous 64x64x8 latents for 128x128
+RGBA inputs, a 2x spatial reduction, nearest-neighbor decoder upsampling, and separate
+RGB/alpha reconstruction terms. It is accepted through a fixed, identity-disjoint
+16-sprite numeric and visual audit. At step 10,000, the 2x codec reports
+premultiplied-RGBA MAE `0.001771`, visible-RGB MAE `0.014440`, alpha IoU at 127
+`0.999787`, report SHA-256
+`f77731531e5c60157d25a766eb8f49268eb31ffcc891b5500afe0e6028a2e357`, and gallery
+SHA-256 `976527a6798f94b0d92ef72c5dc1a64e7c1e12181cea682489ed62ca616ec5e9`.
+The matched 4x step-10,000 control reached `0.002597`, `0.021058`, and `0.999314`
+respectively. The 2x representation therefore doubles latent area but materially
+improves one-pixel reconstruction and is the active quality contract; the 4x codec
+remains a compute ablation.
 
 The still-image experiment has two matched branches. The primary research branch is
 a compact latent DiT trained from scratch over the custom RGBA codec, with a frozen
@@ -95,6 +97,18 @@ RGB, so it must use a separately declared background/mask contract and cannot be
 silently treated as native RGBA. PixArt's official 0.6B 256px DiT is a later
 architecturally aligned control. Sana is not the first sprite control because its
 official 32x compression is hostile to one-pixel fidelity.
+
+Canonical MUGEN appearance text is produced by a pinned, user-hosted
+`RedHatAI/Qwen3.5-122B-A10B-NVFP4` vision model at revision
+`49d19c108259a21450c40b8af38828b0a97390d8`. The model receives only a neutral-canvas
+render of the selected source frame: identity labels, character names, franchise
+names, and source prompts are withheld. Reasoning-enabled extraction is constrained
+to a typed JSON record for visible entity type, build, pose, facing, surface, hair,
+face, clothing regions, footwear, armor, accessories, equipment, colors, and
+distinctive or uncertain features. Raw service responses and reasoning are retained;
+unsupported sentinel phrases and uncertain features are excluded from training text.
+Every input PNG, request body, response body, source array, and resulting prompt is
+hash-bound. These captions are still model-generated and unverified, not ground truth.
 
 The temporal model remains project-owned: a compact latent DiT consumes reference
 appearance tokens, action fields `(verb, tier, strength, form, stance, direction,
