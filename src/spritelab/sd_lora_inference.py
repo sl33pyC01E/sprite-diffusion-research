@@ -8,6 +8,7 @@ import os
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
 import numpy as np
 from PIL import Image
 
