@@ -55,6 +55,99 @@ def _pm(rgba: np.ndarray) -> np.ndarray:
     return np.concatenate((unit[..., :3] * alpha, alpha), axis=-1)
 
 
+def _identity_retrieval(
+    generated: dict[str, np.ndarray],
+    targets: dict[str, _Target],
+) -> dict[str, object]:
+    """Measure identity retention against same-control held-out alternatives.
+
+    Exact-pixel error alone can reward a generic centered silhouette. This audit
+    groups clips by every non-identity condition, embeds target and generated
+    clips as 16x16 premultiplied-RGBA tensors, and ranks the nearest held-out
+    identity. Multiple authored clips for one identity count as one candidate.
+    """
+
+    groups: dict[tuple[str, str, str, str], list[str]] = defaultdict(list)
+    for target in targets.values():
+        request = target.request
+        groups[(request.action, request.direction, request.view, request.loop_mode)].append(
+            target.sequence_id
+        )
+    rows: list[dict[str, object]] = []
+    for group, raw_ids in sorted(groups.items(), key=lambda item: repr(item[0]).encode()):
+        ids = tuple(sorted(raw_ids, key=str.encode))
+        identities = tuple(sorted({targets[value].identity_id for value in ids}, key=str.encode))
+        if len(identities) < 2:
+            continue
+        target_features = np.stack(
+            [_pm(resize_rgba_nearest(targets[value].rgba, 16)).reshape(-1) for value in ids],
+            axis=0,
+        ).astype(np.float32, copy=False)
+        generated_features = np.stack(
+            [_pm(resize_rgba_nearest(generated[value], 16)).reshape(-1) for value in ids],
+            axis=0,
+        ).astype(np.float32, copy=False)
+        target_norm = np.sum(target_features * target_features, axis=1)
+        generated_norm = np.sum(generated_features * generated_features, axis=1)
+        distances = (
+            generated_norm[:, None]
+            + target_norm[None, :]
+            - 2.0 * (generated_features @ target_features.T)
+        ) / target_features.shape[1]
+        distances = np.maximum(distances, 0.0)
+        identity_indices = {
+            identity: np.asarray(
+                [index for index, value in enumerate(ids) if targets[value].identity_id == identity]
+            )
+            for identity in identities
+        }
+        for row_index, sequence_id in enumerate(ids):
+            correct_identity = targets[sequence_id].identity_id
+            identity_distances = {
+                identity: float(np.min(distances[row_index, indices]))
+                for identity, indices in identity_indices.items()
+            }
+            correct_distance = identity_distances[correct_identity]
+            alternatives = [
+                value
+                for identity, value in identity_distances.items()
+                if identity != correct_identity
+            ]
+            best_alternative = min(alternatives)
+            rank = 1 + sum(value < correct_distance for value in alternatives)
+            rows.append(
+                {
+                    "candidate_identities": len(identities),
+                    "correct_distance": correct_distance,
+                    "correct_preferred": correct_distance < best_alternative,
+                    "group": {
+                        "action": group[0],
+                        "direction": group[1],
+                        "loop_mode": group[3],
+                        "view": group[2],
+                    },
+                    "margin_alternative_minus_correct": best_alternative - correct_distance,
+                    "rank": rank,
+                    "reciprocal_rank": 1.0 / rank,
+                    "sequence_id": sequence_id,
+                }
+            )
+    return {
+        "distance": "mean_squared_premultiplied_rgba_at_exact_floor_nearest_16x16",
+        "eligible": len(rows),
+        "mean_margin_alternative_minus_correct": (
+            float(np.mean([row["margin_alternative_minus_correct"] for row in rows]))
+            if rows
+            else None
+        ),
+        "mean_reciprocal_rank": (
+            float(np.mean([row["reciprocal_rank"] for row in rows])) if rows else None
+        ),
+        "rows": rows,
+        "top1_correct": sum(bool(row["correct_preferred"]) for row in rows),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inference", type=Path, required=True)
@@ -223,6 +316,7 @@ def main() -> None:
             ),
             "corpus_sha256": corpus.corpus_sha256,
             "hard_alpha_threshold": args.hard_alpha_threshold,
+            "identity_retrieval": _identity_retrieval(generated, targets),
             "inference_report": {
                 "file_sha256": hashlib.sha256(report_payload).hexdigest(),
                 "path": str(inference_report_path),
@@ -245,6 +339,8 @@ def main() -> None:
             "action_preference": f"{artifact['action_preference']['correct']}/"
             f"{artifact['action_preference']['eligible']}",
             "evaluation_sha256": hashlib.sha256(payload).hexdigest(),
+            "identity_retrieval": f"{artifact['identity_retrieval']['top1_correct']}/"
+            f"{artifact['identity_retrieval']['eligible']}",
             "pm_mae": artifact["aggregate"]["premultiplied_rgba_mae"]["mean"],
         }
     )
