@@ -34,15 +34,15 @@ class MugenStillReference:
 
 _VERB_PRIORITY = {
     "idle": 0,
-    "intro": 1,
-    "walk": 2,
-    "run": 3,
-    "crouch": 4,
-    "turn": 5,
-    "block": 6,
-    "normal_attack": 7,
-    "special_attack": 8,
-    "super_attack": 9,
+    "walk": 1,
+    "run": 2,
+    "crouch": 3,
+    "turn": 4,
+    "block": 5,
+    "normal_attack": 6,
+    "special_attack": 7,
+    "super_attack": 8,
+    "intro": 20,
 }
 
 _COLORS = {
@@ -170,7 +170,8 @@ def filtered_appearance_caption(raw_caption: str) -> str:
 
     if not isinstance(raw_caption, str) or not raw_caption.strip():
         raise ValueError("raw_caption must be non-empty text")
-    sentences = [value.strip() for value in raw_caption.replace("\n", " ").split(".")]
+    sanitized = sanitize_caption_text(raw_caption)
+    sentences = [value.strip() for value in sanitized.replace("\n", " ").split(".")]
     retained = [
         value
         for value in sentences
@@ -179,6 +180,17 @@ def filtered_appearance_caption(raw_caption: str) -> str:
         and "pixelated appearance" not in value.casefold()
     ]
     return ". ".join(retained) + ("." if retained else "")
+
+
+def sanitize_caption_text(raw_caption: str) -> str:
+    """Remove only known tokenizer-control strings and normalize whitespace."""
+
+    if not isinstance(raw_caption, str) or not raw_caption.strip():
+        raise ValueError("raw_caption must be non-empty text")
+    value = raw_caption
+    for token in ("<pad>", "</s>", "<s>"):
+        value = value.replace(token, " ")
+    return " ".join(value.split())
 
 
 def detailed_training_prompt(reference: MugenStillReference, raw_caption: str) -> str:

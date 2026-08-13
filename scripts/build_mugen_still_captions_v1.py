@@ -33,7 +33,7 @@ MODEL_ID = "microsoft/Florence-2-base"
 MODEL_DIR = ROOT / f"data/models/florence-2-base-{MODEL_COMMIT}"
 MATERIALIZATION = ROOT / "data/processed/mugen-mffa-anime-combined-action-v1/materialization.json"
 TAXONOMY = ROOT / "data/index/reports/mugen-mffa-action-taxonomy-v1.json"
-OUTPUT = ROOT / "data/processed/mugen-mffa-canonical-still-captions-v1"
+OUTPUT = ROOT / "data/processed/mugen-mffa-canonical-still-captions-v2"
 TASK = "<MORE_DETAILED_CAPTION>"
 EXPECTED_MODEL_FILES = {
     "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
@@ -137,6 +137,13 @@ def main() -> None:
             "taxonomy_file_sha256": _file_sha256(TAXONOMY),
             "taxonomy_path": str(TAXONOMY),
         },
+        "supersedes": {
+            "file_sha256": "dbad188cbd0b92397cdf5381f4106b1427932aecf0b1bb60459e506b722c28dd",
+            "path": str(
+                ROOT / "data/processed/mugen-mffa-canonical-still-captions-v1/manifest.json"
+            ),
+            "reason": "literal_pad_tokens_and_intro_first_reference_priority",
+        },
     }
     payload = _canonical_json(manifest)
     with manifest_path.open("xb") as handle:
@@ -161,6 +168,7 @@ def _caption_batch(
         images.append(Image.fromarray(composite).resize((512, 512), Image.Resampling.NEAREST))
     inputs = processor(text=[TASK] * len(batch), images=images, return_tensors="pt")
     inputs = {name: value.to(device=device) for name, value in inputs.items()}
+    inputs["pixel_values"] = inputs["pixel_values"].to(dtype=next(model.parameters()).dtype)
     with torch.no_grad():
         generated = model.generate(
             input_ids=inputs["input_ids"],
@@ -169,12 +177,13 @@ def _caption_batch(
             num_beams=3,
             do_sample=False,
         )
-    decoded = processor.batch_decode(generated, skip_special_tokens=False)
+    decoded_raw = processor.batch_decode(generated, skip_special_tokens=False)
+    decoded_clean = processor.batch_decode(generated, skip_special_tokens=True)
     records = []
-    for reference, composite_sha256, raw_tokens in zip(
-        batch, composite_hashes, decoded, strict=True
+    for reference, composite_sha256, raw_tokens, clean_text in zip(
+        batch, composite_hashes, decoded_raw, decoded_clean, strict=True
     ):
-        processed = processor.post_process_generation(raw_tokens, task=TASK, image_size=(512, 512))
+        processed = processor.post_process_generation(clean_text, task=TASK, image_size=(512, 512))
         raw_caption = processed[TASK]
         records.append(
             {

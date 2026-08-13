@@ -11,6 +11,7 @@ from spritelab.mugen_stills import (
     detailed_training_prompt,
     filtered_appearance_caption,
     load_mugen_still_references,
+    sanitize_caption_text,
 )
 
 
@@ -81,6 +82,7 @@ def test_reference_plan_prefers_idle_medoid_and_builds_caption_facts(tmp_path) -
     assert composite[0, 0].tolist() == [127, 127, 127]
     raw = "A red armored knight. The background is grey. Pixelated appearance."
     assert filtered_appearance_caption(raw) == "A red armored knight."
+    assert sanitize_caption_text("</s><s>A knight.</s><pad><pad>") == "A knight."
     prompt = detailed_training_prompt(reference, raw)
     assert "Fixture Knight" in prompt
     assert "transparent background" in prompt
