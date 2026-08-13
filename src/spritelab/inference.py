@@ -30,6 +30,8 @@ from spritelab.models.conditioning import (
 from spritelab.models.config import ConditioningSchema, PixelDiTConfig, SpriteClipCondition
 from spritelab.models.flow import endpoint_sample_velocity_model, euler_sample_velocity_model
 from spritelab.models.pixeldit import FactorizedSpriteDiT
+from spritelab.models.semantic_conditioning import SemanticSpriteConditionEncoder
+from spritelab.semantic_text import SemanticEmbeddingTable, load_semantic_embedding_table
 from spritelab.storage import DiskGuard, HashMismatch
 from spritelab.training_data import model_to_rgba_uint8
 
@@ -108,6 +110,7 @@ class _LoadedCheckpoint:
     stored_training_config: dict[str, Any]
     stored_runtime: dict[str, Any]
     step: int
+    semantic_table: SemanticEmbeddingTable | None
 
 
 _BASE_TRAINING_CONFIG_FIELDS = (
@@ -190,6 +193,17 @@ def run_checkpoint_inference(
         loaded.model_config.conditioning,
         max_text_bytes=loaded.max_text_bytes,
     )
+    semantic_vectors = None
+    if loaded.semantic_table is not None:
+        try:
+            semantic_array = loaded.semantic_table.lookup_many(
+                [request.description for request in request_rows]
+            )
+        except KeyError as error:
+            raise CheckpointContractError(
+                "semantic checkpoint accepts only descriptions in its hash-bound table"
+            ) from error
+        semantic_vectors = runtime.from_numpy(semantic_array)
     device = _validated_device(runtime, inference.device)
     estimated_output_bytes = _estimated_output_bytes(
         loaded.model_config,
@@ -203,6 +217,8 @@ def run_checkpoint_inference(
 
     denoiser = loaded.denoiser.to(device=device)
     condition_encoder = loaded.condition_encoder.to(device=device)
+    if semantic_vectors is not None:
+        semantic_vectors = semantic_vectors.to(device=device)
     denoiser.eval()
     condition_encoder.eval()
     phase_array = np.ascontiguousarray(phase_rows, dtype=np.float32)
@@ -225,7 +241,10 @@ def run_checkpoint_inference(
     try:
         runtime.use_deterministic_algorithms(inference.deterministic_algorithms)
         with runtime.no_grad():
-            context, context_mask = condition_encoder(encoded)
+            if semantic_vectors is None:
+                context, context_mask = condition_encoder(encoded)
+            else:
+                context, context_mask = condition_encoder(encoded, semantic_vectors)
             if inference.sampler_algorithm == "endpoint":
                 sampled = endpoint_sample_velocity_model(
                     denoiser,
@@ -301,11 +320,14 @@ def run_checkpoint_inference(
         "schema_version": 1,
         "claim_scope": {
             "accepted_input": (
-                "arbitrary description text plus checkpoint-vocabulary structured labels"
+                "hash-bound semantic-table descriptions plus checkpoint-vocabulary structured "
+                "labels"
+                if loaded.semantic_table is not None
+                else "arbitrary description text plus checkpoint-vocabulary structured labels"
             ),
             "limit": (
-                "overfit checkpoint replay and conditioning diagnostic only; arbitrary text "
-                "acceptance is not evidence of open-vocabulary or out-of-sample generalization"
+                "checkpoint replay and conditioning diagnostic only; accepted text is not "
+                "evidence of open-vocabulary generalization"
             ),
         },
         "checkpoint": {
@@ -324,6 +346,17 @@ def run_checkpoint_inference(
             "text_contract": (
                 "model receives the stripped description through deterministic NFC UTF-8 "
                 "byte tokenization; rendered_prompt is documentation, not a second text input"
+            ),
+            "semantic_embedding_table": (
+                {
+                    "embedding_dim": loaded.semantic_table.descriptor.embedding_dim,
+                    "embeddings_array_sha256": loaded.semantic_table.embeddings_array_sha256,
+                    "manifest_sha256": loaded.semantic_table.manifest_sha256,
+                    "model_id": loaded.semantic_table.descriptor.model_id,
+                    "model_revision": loaded.semantic_table.descriptor.model_revision,
+                }
+                if loaded.semantic_table is not None
+                else None
             ),
         },
         "sampler": {
@@ -403,11 +436,20 @@ def _load_verified_checkpoint(runtime: Any, path: Path) -> _LoadedCheckpoint:
         "checkpoint.condition_encoder",
     )
     denoiser = FactorizedSpriteDiT(model_config)
-    condition_encoder = SpriteConditionEncoder(
-        model_config.conditioning,
-        condition_dim=model_config.condition_dim,
-        max_text_bytes=training_config["max_text_bytes"],
-    )
+    semantic_table = _load_checkpoint_semantic_table(payload)
+    if semantic_table is None:
+        condition_encoder = SpriteConditionEncoder(
+            model_config.conditioning,
+            condition_dim=model_config.condition_dim,
+            max_text_bytes=training_config["max_text_bytes"],
+        )
+    else:
+        condition_encoder = SemanticSpriteConditionEncoder(
+            model_config.conditioning,
+            condition_dim=model_config.condition_dim,
+            semantic_dim=semantic_table.descriptor.embedding_dim,
+            max_text_bytes=training_config["max_text_bytes"],
+        )
     try:
         denoiser.load_state_dict(denoiser_state, strict=True)
         condition_encoder.load_state_dict(encoder_state, strict=True)
@@ -423,7 +465,47 @@ def _load_verified_checkpoint(runtime: Any, path: Path) -> _LoadedCheckpoint:
         stored_training_config=training_config,
         stored_runtime=stored_runtime,
         step=step,
+        semantic_table=semantic_table,
     )
+
+
+def _load_checkpoint_semantic_table(
+    payload: Mapping[str, Any],
+) -> SemanticEmbeddingTable | None:
+    artifact_kind = payload.get("artifact_kind")
+    semantic_kind = "broad_training_semantic_ema_inference_checkpoint"
+    raw = payload.get("semantic_embedding_table")
+    if artifact_kind != semantic_kind:
+        if raw is not None:
+            raise CheckpointContractError(
+                "non-semantic checkpoint cannot declare a semantic embedding table"
+            )
+        return None
+    if not isinstance(raw, Mapping):
+        raise CheckpointContractError("semantic checkpoint table record is missing")
+    directory = raw.get("artifact_directory")
+    if not isinstance(directory, str) or not directory:
+        raise CheckpointContractError("semantic checkpoint table path is invalid")
+    try:
+        table = load_semantic_embedding_table(directory)
+    except (OSError, ValueError) as error:
+        raise CheckpointContractError("semantic checkpoint table failed verification") from error
+    expected = {
+        "embeddings_array_sha256": table.embeddings_array_sha256,
+        "embeddings_file_sha256": table.embeddings_file_sha256,
+        "manifest_sha256": table.manifest_sha256,
+        "model_id": table.descriptor.model_id,
+        "model_revision": table.descriptor.model_revision,
+        "snapshot_tree_sha256": table.descriptor.snapshot_tree_sha256,
+    }
+    mismatches = {
+        key: (raw.get(key), value) for key, value in expected.items() if raw.get(key) != value
+    }
+    if mismatches:
+        raise CheckpointContractError(
+            f"semantic checkpoint table record differs from artifact: {mismatches!r}"
+        )
+    return table
 
 
 def _reconstruct_model_config(raw: Mapping[str, Any]) -> PixelDiTConfig:

@@ -26,12 +26,22 @@ contract for that experiment:
   Euler sampler; and
 - import-safe behavior when PyTorch is not installed.
 
-It intentionally does **not** yet include a semantic pretrained text encoder,
-reference-image encoder, complete tensor dataset loader, optimizer/checkpoint runner,
-or polished inference exporter. Those components should be selected only after a
-small overfit experiment proves the model and data contracts. The byte-level encoder
-is an executable plumbing baseline; it is not expected to generalize language from a
-tiny sprite corpus.
+The initial byte-level encoder remains an executable plumbing baseline and is not
+expected to generalize language from a tiny sprite corpus. The next controlled path is
+now implemented separately: a frozen, hash-bound CLIP text projection is fused into
+the description-summary token while categorical action/view/direction/loop channels
+remain independent. `spritelab.semantic_text` binds the exact local encoder snapshot,
+tokenizer, input strings, and every embedding row; `SemanticSpriteConditionEncoder`
+adds only a trainable projection/fusion layer. This does not yet provide unrestricted
+text inference: a semantic checkpoint accepts only descriptions present in its
+verified embedding table unless a separately pinned local encoder is invoked.
+
+`spritelab.broad_train` also adds the first identity-disjoint minibatch runner. It
+normalizes materialized clips by an explicit nearest-neighbor coordinate contract,
+samples identities and actions hierarchically, trains ordinary rectified-flow and
+direct endpoint objectives, tracks EMA weights, uses fixed validation noise, and
+publishes immutable periodic resume checkpoints. It still does **not** include a
+reference-image encoder or a production serving stack.
 
 ## Why native pixel space
 
