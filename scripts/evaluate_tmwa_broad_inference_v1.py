@@ -58,6 +58,7 @@ def _pm(rgba: np.ndarray) -> np.ndarray:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inference", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, default=MANIFEST)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", choices=("validation", "test"), default="validation")
     parser.add_argument("--hard-alpha-threshold", type=int)
@@ -73,10 +74,10 @@ def main() -> None:
     report = json.loads(report_payload)
     model = report["model_config"]
     corpus = prepare_broad_corpus(
-        MANIFEST, target_size=model["height"], target_frames=model["num_frames"]
+        args.manifest, target_size=model["height"], target_frames=model["num_frames"]
     )
     source_clips = load_materialized_training_clips(
-        MANIFEST, split=args.split, target_frames=model["num_frames"]
+        args.manifest, split=args.split, target_frames=model["num_frames"]
     )
     source = {clip.sequence_id: clip for clip in source_clips}
     targets = {

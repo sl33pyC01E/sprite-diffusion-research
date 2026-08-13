@@ -26,17 +26,19 @@ THRESHOLDS = tuple(range(16, 256, 16))
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inference", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, default=MANIFEST)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--targets", type=Path, default=TARGETS)
     args = parser.parse_args()
     inference = args.inference.resolve()
     report_path = inference / "inference-report.json"
     report_bytes = report_path.read_bytes()
     report = json.loads(report_bytes)
-    corpus = prepare_broad_corpus(MANIFEST, target_size=128, target_frames=8)
+    corpus = prepare_broad_corpus(args.manifest, target_size=128, target_frames=8)
     if len(report["samples"]) != len(corpus.validation):
         raise ValueError("inference/validation count mismatch")
 
-    TARGETS.mkdir(parents=True, exist_ok=True)
+    args.targets.mkdir(parents=True, exist_ok=True)
     sources: list[CalibrationArrayRef] = []
     targets: list[CalibrationArrayRef] = []
     for sample, row in zip(report["samples"], corpus.validation, strict=True):
@@ -52,7 +54,7 @@ def main() -> int:
         source_path = inference / sample["path"]
         if _sha256(source_path) != sample["file_sha256"]:
             raise ValueError(f"source sample hash mismatch for {row.sequence_id}")
-        target_path = TARGETS / f"{row.sequence_id}.npy"
+        target_path = args.targets / f"{row.sequence_id}.npy"
         if target_path.exists():
             existing = np.load(target_path, allow_pickle=False)
             if not np.array_equal(existing, row.rgba):

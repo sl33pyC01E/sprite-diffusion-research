@@ -20,6 +20,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--checkpoint-sha256", required=True)
+    parser.add_argument("--manifest", type=Path, default=MANIFEST)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", choices=("validation", "test"), default="validation")
     parser.add_argument("--seed", type=int)
@@ -34,7 +35,7 @@ def main() -> None:
         else {"validation": 20260917, "test": 20260918}[args.split]
     )
     clips = load_materialized_training_clips(
-        MANIFEST,
+        args.manifest,
         split=args.split,
         target_frames=8,
     )
