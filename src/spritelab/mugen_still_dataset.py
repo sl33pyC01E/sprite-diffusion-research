@@ -51,7 +51,7 @@ def compact_appearance_prompt(
     structured: dict[str, Any],
     *,
     entity_class: str,
-    maximum_words: int = 44,
+    maximum_words: int = 40,
 ) -> str:
     """Render dense appearance facts for CLIP without duplicative prose.
 
