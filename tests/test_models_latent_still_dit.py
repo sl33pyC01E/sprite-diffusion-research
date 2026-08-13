@@ -47,6 +47,14 @@ def test_latent_still_dit_accepts_classifier_free_null_context() -> None:
     latent = torch.randn(1, 4, 16, 16)
     output = model(latent, torch.tensor([1.0]))
     assert output.shape == latent.shape
+    context = torch.randn(2, 5, 16)
+    dropped = model(
+        latent.expand(2, -1, -1, -1),
+        torch.ones(2),
+        context,
+        context_dropout_mask=torch.tensor([True, False]),
+    )
+    assert dropped.shape == (2, 4, 16, 16)
 
 
 def test_latent_still_contract_rejects_bad_geometry_and_masks() -> None:
@@ -62,6 +70,13 @@ def test_latent_still_contract_rejects_bad_geometry_and_masks() -> None:
             torch.ones(2),
             torch.randn(2, 5, 16),
             context_mask=torch.ones(2, 4, dtype=torch.bool),
+        )
+    with pytest.raises(ValueError, match="context_dropout_mask"):
+        model(
+            torch.randn(2, 4, 16, 16),
+            torch.ones(2),
+            torch.randn(2, 5, 16),
+            context_dropout_mask=torch.ones(3, dtype=torch.bool),
         )
 
 

@@ -267,6 +267,7 @@ if torch is not None and nn is not None:
             context: torch.Tensor | None = None,
             *,
             context_mask: torch.Tensor | None = None,
+            context_dropout_mask: torch.Tensor | None = None,
         ) -> torch.Tensor:
             validate_latent_still_shapes(
                 tuple(latent.shape),
@@ -278,7 +279,11 @@ if torch is not None and nn is not None:
                 raise TypeError("latent and timesteps must use floating point")
             batch_size = latent.shape[0]
             projected_context, mask, pooled = self._prepare_context(
-                context, context_mask, batch_size=batch_size, device=latent.device
+                context,
+                context_mask,
+                context_dropout_mask,
+                batch_size=batch_size,
+                device=latent.device,
             )
             global_condition = (
                 self.timestep_mlp(
@@ -298,6 +303,7 @@ if torch is not None and nn is not None:
             self,
             context: torch.Tensor | None,
             context_mask: torch.Tensor | None,
+            context_dropout_mask: torch.Tensor | None,
             *,
             batch_size: int,
             device: torch.device,
@@ -305,6 +311,8 @@ if torch is not None and nn is not None:
             if context is None:
                 if context_mask is not None:
                     raise ValueError("context_mask cannot be supplied without context")
+                if context_dropout_mask is not None:
+                    raise ValueError("context_dropout_mask cannot be supplied without context")
                 projected = self.null_context.expand(batch_size, -1, -1)
                 mask = torch.ones((batch_size, 1), device=device, dtype=torch.bool)
                 return projected, mask, projected[:, 0]
@@ -317,6 +325,16 @@ if torch is not None and nn is not None:
                 mask = context_mask.to(device=device, dtype=torch.bool)
                 if not bool(mask.any(dim=1).all()):
                     raise ValueError("each context row must retain at least one token")
+            if context_dropout_mask is not None:
+                if tuple(context_dropout_mask.shape) != (batch_size,):
+                    raise ValueError("context_dropout_mask must have shape [B]")
+                dropout_rows = context_dropout_mask.to(device=device, dtype=torch.bool)
+                if bool(dropout_rows.any()):
+                    null_rows = self.null_context.expand(batch_size, projected.shape[1], -1)
+                    projected = torch.where(dropout_rows[:, None, None], null_rows, projected)
+                    null_mask = torch.zeros_like(mask)
+                    null_mask[:, 0] = True
+                    mask = torch.where(dropout_rows[:, None], null_mask, mask)
             weights = mask.to(dtype=projected.dtype).unsqueeze(-1)
             pooled = (projected * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1)
             return projected, mask, pooled
