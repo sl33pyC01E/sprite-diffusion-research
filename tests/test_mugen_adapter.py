@@ -11,7 +11,9 @@ from PIL import Image
 from spritelab.adapters.mugen import (
     MugenSffV1Sprite,
     audit_character_zip,
+    audit_character_zip_variants,
     decode_sff_v1,
+    decode_sff_v2,
     inspect_sff_header,
     label_action_number,
     materialize_actions,
@@ -33,7 +35,7 @@ localcoord = 320, 240\r\n
 pal.defaults = 2, 1\r\n
 [Files]\r\n
 sprite = Hero.sff\r\n
-anim = Hero.air\r\n
+anim = Hero.air;Animation data\r\n
 cmd = Hero.cmd ; runtime logic\r\n
 """
     )
@@ -44,6 +46,7 @@ cmd = Hero.cmd ; runtime logic\r\n
     assert parsed.local_coord == (320, 240)
     assert parsed.palette_defaults == (2, 1)
     assert parsed.file("sprite") == "Hero.sff"
+    assert parsed.file("anim") == "Hero.air"
     assert parsed.file("cmd") == "Hero.cmd"
     assert parsed.source_comments == ("mirrored by Example",)
 
@@ -83,6 +86,12 @@ def test_air_rejects_duplicate_actions_and_invalid_durations() -> None:
         parse_air("[Begin Action 0]\n0,0,0,0,1\n[Begin Action 0]\n0,1,0,0,1")
     with pytest.raises(ValueError, match="invalid AIR duration"):
         parse_air("[Begin Action 0]\n0,0,0,0,-2")
+
+
+def test_air_uses_final_loopstart_like_runtime_parser() -> None:
+    action = parse_air("[Begin Action 0]\n0,0,0,0,1\nLoopstart\n0,1,0,0,1\nLoopstart\n0,2,0,0,1")[0]
+
+    assert action.loop_start_index == 2
 
 
 def test_action_labels_distinguish_exact_and_recommended_ranges() -> None:
@@ -130,6 +139,21 @@ def test_sff_v1_decodes_palette_mask_and_linked_sprite() -> None:
     assert (sprites[1].axis_x, sprites[1].axis_y) == (3, 4)
 
 
+def test_sff_v2_decodes_palette_raw_and_rle8() -> None:
+    palette = bytearray(1024)
+    palette[4:8] = bytes((10, 20, 30, 255))
+    raw = _sff_v2_fixture(bytes((0, 1, 1, 0)), palette, pixel_format=0)
+    compressed = _sff_v2_fixture(struct.pack("<I", 4) + bytes((0x44, 1)), palette, pixel_format=2)
+
+    raw_sprites, raw_palettes = decode_sff_v2(raw)
+    compressed_sprites, _ = decode_sff_v2(compressed)
+
+    assert len(raw_palettes) == 1
+    assert raw_palettes[0].rgba[3] == 0
+    assert raw_sprites[0].rgba == bytes((0, 0, 0, 0, 10, 20, 30, 255, 10, 20, 30, 255, 0, 0, 0, 0))
+    assert compressed_sprites[0].rgba == bytes((10, 20, 30, 255)) * 4
+
+
 def test_character_zip_audit_never_interprets_runtime_logic() -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -152,6 +176,27 @@ def test_character_zip_audit_never_interprets_runtime_logic() -> None:
     assert audit.runtime_logic_members == ("hero/Hero.cmd",)
     assert audit.executable_members == ("hero/unsafe.exe",)
     assert audit.unclassified_members == ("hero/readme.txt",)
+
+
+def test_character_zip_variants_preserve_distinct_media_pairs() -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name in ("Alpha", "Beta"):
+            archive.writestr(
+                f"pack/{name}.def",
+                f"[Info]\nname={name}\n[Files]\nsprite={name}.sff\nanim={name}.air\n",
+            )
+            archive.writestr(f"pack/{name}.air", "[Begin Action 0]\n0,0,0,0,6")
+            archive.writestr(
+                f"pack/{name}.sff",
+                b"ElecbyteSpr\x00" + bytes((0, 0, 0, 1)) + struct.pack("<I", 0),
+            )
+
+    variants = audit_character_zip_variants(buffer.getvalue())
+
+    assert [value.definition.name for value in variants] == ["Alpha", "Beta"]
+    with pytest.raises(ValueError, match="2 AIR/SFF media pairs"):
+        audit_character_zip(buffer.getvalue())
 
 
 def test_action_materialization_aligns_axis_offsets_and_exact_flip() -> None:
@@ -183,3 +228,45 @@ def test_action_materialization_aligns_axis_offsets_and_exact_flip() -> None:
     assert (action.canvas_world_left, action.canvas_world_top) == (2, 4)
     assert (action.canvas_width, action.canvas_height) == (2, 1)
     assert action.frames[0].rgba == bytes((4, 5, 6, 255, 1, 2, 3, 255))
+
+
+def _sff_v2_fixture(sprite_data: bytes, palette: bytearray, *, pixel_format: int) -> bytes:
+    first_sprite = 68
+    first_palette = first_sprite + 28
+    literal_offset = first_palette + 16
+    palette_bytes = bytes(palette)
+    translated_offset = literal_offset + len(palette_bytes) + len(sprite_data)
+    header = bytearray(68)
+    header[:12] = b"ElecbyteSpr\x00"
+    header[12:16] = bytes((0, 0, 0, 2))
+    struct.pack_into(
+        "<8I",
+        header,
+        36,
+        first_sprite,
+        1,
+        first_palette,
+        1,
+        literal_offset,
+        len(palette_bytes) + len(sprite_data),
+        translated_offset,
+        0,
+    )
+    sprite = struct.pack(
+        "<4H2hH2B2I2H",
+        0,
+        0,
+        2,
+        2,
+        1,
+        2,
+        0,
+        pixel_format,
+        8,
+        len(palette_bytes),
+        len(sprite_data),
+        0,
+        0,
+    )
+    palette_header = struct.pack("<4H2I", 1, 1, 256, 0, 0, len(palette_bytes))
+    return bytes(header) + sprite + palette_header + palette_bytes + sprite_data

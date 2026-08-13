@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -18,12 +19,22 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from spritelab.broad_train import prepare_broad_corpus  # noqa: E402
+from spritelab.broad_train import prepare_broad_corpus, resize_rgba_nearest  # noqa: E402
+from spritelab.decode import HardAlphaDecodeConfig, hard_alpha_decode_rgba  # noqa: E402
 from spritelab.evaluation import compare_matched_sequences  # noqa: E402
 from spritelab.previews import export_rgba_clip_preview  # noqa: E402
 from spritelab.training_data import load_materialized_training_clips  # noqa: E402
 
 MANIFEST = ROOT / "data/processed/tmwa-model-ready-action-v1/materialization.json"
+
+
+@dataclass(frozen=True, slots=True)
+class _Target:
+    sequence_id: str
+    identity_id: str
+    action: str
+    request: object
+    rgba: np.ndarray
 
 
 def _sha(path: Path) -> str:
@@ -48,7 +59,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inference", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--split", choices=("validation", "test"), default="validation")
+    parser.add_argument("--hard-alpha-threshold", type=int)
     args = parser.parse_args()
+    if args.hard_alpha_threshold is not None:
+        HardAlphaDecodeConfig(threshold=args.hard_alpha_threshold)
     inference = args.inference.resolve()
     output = args.output.resolve()
     if output.exists():
@@ -60,16 +75,23 @@ def main() -> None:
     corpus = prepare_broad_corpus(
         MANIFEST, target_size=model["height"], target_frames=model["num_frames"]
     )
-    targets = {row.sequence_id: row for row in corpus.validation}
-    source = {
-        clip.sequence_id: clip
-        for clip in load_materialized_training_clips(
-            MANIFEST, split="validation", target_frames=model["num_frames"]
+    source_clips = load_materialized_training_clips(
+        MANIFEST, split=args.split, target_frames=model["num_frames"]
+    )
+    source = {clip.sequence_id: clip for clip in source_clips}
+    targets = {
+        clip.sequence_id: _Target(
+            sequence_id=clip.sequence_id,
+            identity_id=clip.identity_id,
+            action=clip.request.action,
+            request=clip.request,
+            rgba=resize_rgba_nearest(clip.rgba, model["height"]),
         )
+        for clip in source_clips
     }
     samples = report["samples"]
-    if len(samples) != len(corpus.validation):
-        raise ValueError("inference count differs from validation split")
+    if len(samples) != len(targets):
+        raise ValueError(f"inference count differs from {args.split} split")
     ordered_ids = tuple(sorted(targets, key=str.encode))
     stage = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     rows: list[dict[str, object]] = []
@@ -93,12 +115,17 @@ def main() -> None:
             target = targets[sequence_id]
             if prediction.shape != target.rgba.shape or prediction.dtype != np.uint8:
                 raise ValueError(f"sample tensor mismatch at {index}")
+            if args.hard_alpha_threshold is not None:
+                prediction = hard_alpha_decode_rgba(
+                    prediction,
+                    config=HardAlphaDecodeConfig(threshold=args.hard_alpha_threshold),
+                )
             generated[sequence_id] = prediction
             metric = compare_matched_sequences(
                 _images(prediction),
                 _images(target.rgba),
                 loop_mode=request.loop_mode,
-                alpha_threshold=127,
+                alpha_threshold=0,
             )
             rows.append(
                 {
@@ -135,7 +162,7 @@ def main() -> None:
                 )
 
         groups: dict[tuple[str, str, str, str], list[str]] = defaultdict(list)
-        for target in corpus.validation:
+        for target in targets.values():
             groups[
                 (
                     target.identity_id,
@@ -194,6 +221,7 @@ def main() -> None:
                 "generalization, not open-vocabulary generation."
             ),
             "corpus_sha256": corpus.corpus_sha256,
+            "hard_alpha_threshold": args.hard_alpha_threshold,
             "inference_report": {
                 "file_sha256": hashlib.sha256(report_payload).hexdigest(),
                 "path": str(inference_report_path),
@@ -201,6 +229,7 @@ def main() -> None:
             "metrics": rows,
             "schema_version": 1,
             "sequence_count": len(rows),
+            "split": args.split,
         }
         payload = (
             json.dumps(artifact, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"

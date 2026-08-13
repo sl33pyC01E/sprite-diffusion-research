@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Literal
 
+import numpy as np
 from PIL import Image
 
 from spritelab.archive import ArchiveLimits, ZipManifest, ZipMember, inspect_zip
@@ -161,6 +162,36 @@ class MugenSffV1Sprite:
 
 
 @dataclass(frozen=True)
+class MugenSffV2Palette:
+    archive_index: int
+    group_number: int
+    image_number: int
+    color_count: int
+    linked_palette_index: int | None
+    rgba: bytes
+    rgba_sha256: str
+
+
+@dataclass(frozen=True)
+class MugenSffV2Sprite:
+    archive_index: int
+    group_number: int
+    image_number: int
+    axis_x: int
+    axis_y: int
+    width: int
+    height: int
+    linked_sprite_index: int | None
+    pixel_format: int
+    color_depth: int
+    palette_index: int | None
+    indices: bytes | None
+    rgba: bytes
+    indices_sha256: str | None
+    rgba_sha256: str
+
+
+@dataclass(frozen=True)
 class MugenCharacterArchiveAudit:
     archive_sha256: str
     archive_bytes: int
@@ -210,6 +241,7 @@ class MugenActionMaterialization:
     canvas_width: int
     canvas_height: int
     frames: tuple[MugenActionFrame, ...]
+    source_action_index: int = -1
 
 
 @dataclass(frozen=True)
@@ -223,6 +255,7 @@ class MugenActionExclusion:
         "unsupported_air_transform",
     ]
     detail: str
+    source_action_index: int = -1
 
 
 @dataclass(frozen=True)
@@ -271,7 +304,8 @@ def parse_character_def(payload: bytes | str) -> MugenCharacterDefinition:
     first_section = next(
         (index for index, line in enumerate(lines) if line.lstrip().startswith("[")), None
     )
-    parse_text = "\n".join(lines[first_section:]) if first_section is not None else text
+    parse_lines = lines[first_section:] if first_section is not None else lines
+    parse_text = "\n".join(_strip_def_inline_comment(line) for line in parse_lines)
     try:
         parser.read_string(parse_text)
     except configparser.Error as exc:
@@ -291,6 +325,20 @@ def parse_character_def(payload: bytes | str) -> MugenCharacterDefinition:
         files=file_rows,
         source_comments=comments,
     )
+
+
+def _strip_def_inline_comment(line: str) -> str:
+    """Strip legacy semicolon comments even when authors omit preceding whitespace."""
+
+    quoted = False
+    output: list[str] = []
+    for character in line:
+        if character == '"':
+            quoted = not quoted
+        if character == ";" and not quoted:
+            break
+        output.append(character)
+    return "".join(output)
 
 
 def parse_air(
@@ -358,8 +406,7 @@ def parse_air(
         if number is None:
             continue
         if stripped.casefold() == "loopstart":
-            if loop_start is not None:
-                raise ValueError(f"action {number} has multiple Loopstart lines")
+            # Runtime parsers assign on each occurrence; the final marker wins.
             loop_start = len(elements)
             continue
         collision = _COLLISION.match(stripped)
@@ -443,7 +490,11 @@ def inspect_sff_header(payload: bytes) -> MugenSffHeader:
     )
 
 
-def decode_sff_v1(payload: bytes) -> tuple[MugenSffV1Sprite, ...]:
+def decode_sff_v1(
+    payload: bytes,
+    *,
+    initial_palette_rgb: bytes | None = None,
+) -> tuple[MugenSffV1Sprite, ...]:
     """Decode SFF v1 PCX sprites and links without invoking external tools.
 
     Palette index zero is converted to alpha zero according to Elecbyte's sprite
@@ -465,7 +516,9 @@ def decode_sff_v1(payload: bytes) -> tuple[MugenSffV1Sprite, ...]:
 
     sprites: list[MugenSffV1Sprite] = []
     offset = first_offset
-    previous_palette: bytes | None = None
+    if initial_palette_rgb is not None and len(initial_palette_rgb) != 768:
+        raise ValueError("initial SFF v1 palette must contain exactly 768 RGB bytes")
+    previous_palette: bytes | None = initial_palette_rgb
     seen_offsets: set[int] = set()
     for archive_index in range(image_total):
         if offset in seen_offsets:
@@ -505,7 +558,7 @@ def decode_sff_v1(payload: bytes) -> tuple[MugenSffV1Sprite, ...]:
             indices, palette, width, height = _decode_sff_v1_pcx(
                 payload[data_start:data_end],
                 previous_palette=previous_palette,
-                palette_reuse=bool(reuse) or shared_palette,
+                palette_reuse=bool(reuse) or (shared_palette and archive_index > 0),
             )
         previous_palette = palette
         rgba = _indexed_rgba(indices, palette)
@@ -539,12 +592,164 @@ def decode_sff_v1(payload: bytes) -> tuple[MugenSffV1Sprite, ...]:
     return tuple(sprites)
 
 
-def audit_character_zip(
+def decode_sff_v2(
+    payload: bytes,
+) -> tuple[tuple[MugenSffV2Sprite, ...], tuple[MugenSffV2Palette, ...]]:
+    """Decode SFF v2 sprites/palettes without invoking a M.U.G.E.N runtime.
+
+    Supported pixel formats are raw indexed/RGB/RGBA, RLE8, RLE5, LZ5, and
+    the PNG8/24/32 formats added by M.U.G.E.N 1.1. Every table and payload
+    range is checked before decoding.
+    """
+
+    header = inspect_sff_header(payload)
+    if header.format_family != "sff_v2":
+        raise ValueError("decode_sff_v2 requires an SFF v2 payload")
+    if len(payload) < 68:
+        raise ValueError("SFF v2 payload is shorter than its header")
+    (
+        first_sprite_header,
+        sprite_count,
+        first_palette_header,
+        palette_count,
+        literal_data_offset,
+        literal_data_bytes,
+        translated_data_offset,
+        translated_data_bytes,
+    ) = struct.unpack_from("<8I", payload, 36)
+    _bounded_region(payload, literal_data_offset, literal_data_bytes, "literal data")
+    _bounded_region(payload, translated_data_offset, translated_data_bytes, "translated data")
+    if first_sprite_header + sprite_count * 28 > len(payload):
+        raise ValueError("SFF v2 sprite table is out of bounds")
+    if first_palette_header + palette_count * 16 > len(payload):
+        raise ValueError("SFF v2 palette table is out of bounds")
+
+    palettes: list[MugenSffV2Palette] = []
+    for archive_index in range(palette_count):
+        offset = first_palette_header + archive_index * 16
+        group, image, color_count, link, data_offset, data_bytes = struct.unpack_from(
+            "<4H2I", payload, offset
+        )
+        linked: int | None = None
+        if data_bytes == 0:
+            linked = link
+            if linked >= len(palettes):
+                raise ValueError(
+                    f"SFF v2 palette {archive_index} links to unavailable index {linked}"
+                )
+            rgba = palettes[linked].rgba
+        else:
+            start = literal_data_offset + data_offset
+            _bounded_region(payload, start, data_bytes, f"palette {archive_index}")
+            if data_bytes % 4:
+                raise ValueError(f"SFF v2 palette {archive_index} byte count is not RGBA")
+            raw_count = data_bytes // 4
+            if raw_count > 256:
+                raise ValueError(f"SFF v2 palette {archive_index} has over 256 colors")
+            depth = 16
+            while depth < raw_count:
+                depth *= 2
+            depth = min(depth, 256)
+            rgba_array = bytearray(depth * 4)
+            rgba_array[:data_bytes] = payload[start : start + data_bytes]
+            # Version 2.0 stores RGBx and defines mask index zero. Version
+            # 2.01+ stores the authored alpha channel.
+            if header.version_bytes[1] == 0:
+                for color in range(depth):
+                    rgba_array[color * 4 + 3] = 0 if color == 0 else 255
+            rgba = bytes(rgba_array)
+        palettes.append(
+            MugenSffV2Palette(
+                archive_index=archive_index,
+                group_number=group,
+                image_number=image,
+                color_count=color_count,
+                linked_palette_index=linked,
+                rgba=rgba,
+                rgba_sha256=hashlib.sha256(rgba).hexdigest(),
+            )
+        )
+
+    sprites: list[MugenSffV2Sprite] = []
+    for archive_index in range(sprite_count):
+        offset = first_sprite_header + archive_index * 28
+        (
+            group,
+            image,
+            width,
+            height,
+            axis_x,
+            axis_y,
+            link,
+            pixel_format,
+            color_depth,
+            data_offset,
+            data_bytes,
+            palette_index,
+            flags,
+        ) = struct.unpack_from("<4H2hH2B2I2H", payload, offset)
+        linked: int | None = None
+        indices: bytes | None
+        effective_palette: int | None = palette_index
+        if data_bytes == 0:
+            linked = link
+            if linked >= len(sprites):
+                raise ValueError(
+                    f"SFF v2 sprite {archive_index} links to unavailable index {linked}"
+                )
+            source = sprites[linked]
+            width, height = source.width, source.height
+            indices, rgba = source.indices, source.rgba
+            effective_palette = source.palette_index
+        else:
+            base = literal_data_offset if flags & 1 == 0 else translated_data_offset
+            start = base + data_offset
+            _bounded_region(payload, start, data_bytes, f"sprite {archive_index}")
+            encoded = payload[start : start + data_bytes]
+            indices, rgba = _decode_sff_v2_pixels(
+                encoded,
+                width=width,
+                height=height,
+                pixel_format=pixel_format,
+                color_depth=color_depth,
+                palette=(palettes[palette_index].rgba if palette_index < len(palettes) else None),
+            )
+            if indices is not None and palette_index >= len(palettes):
+                raise ValueError(
+                    f"SFF v2 sprite {archive_index} references absent palette {palette_index}"
+                )
+        if len(rgba) != width * height * 4:
+            raise ValueError(f"SFF v2 sprite {archive_index} decoded RGBA size mismatch")
+        sprites.append(
+            MugenSffV2Sprite(
+                archive_index=archive_index,
+                group_number=group,
+                image_number=image,
+                axis_x=axis_x,
+                axis_y=axis_y,
+                width=width,
+                height=height,
+                linked_sprite_index=linked,
+                pixel_format=pixel_format,
+                color_depth=color_depth,
+                palette_index=effective_palette,
+                indices=indices,
+                rgba=rgba,
+                indices_sha256=(
+                    hashlib.sha256(indices).hexdigest() if indices is not None else None
+                ),
+                rgba_sha256=hashlib.sha256(rgba).hexdigest(),
+            )
+        )
+    return tuple(sprites), tuple(palettes)
+
+
+def audit_character_zip_variants(
     archive_payload: bytes,
     *,
     limits: ArchiveLimits | None = None,
-) -> MugenCharacterArchiveAudit:
-    """Audit one ZIP character pack entirely in memory and without execution."""
+) -> tuple[MugenCharacterArchiveAudit, ...]:
+    """Audit every distinct DEF-selected AIR/SFF pair without executing character logic."""
 
     manifest = inspect_zip(io.BytesIO(archive_payload), limits=limits or ArchiveLimits())
     regular = tuple(member for member in manifest.members if member.is_regular_file)
@@ -574,15 +779,24 @@ def audit_character_zip(
             )
             for member, definition in definitions
         ]
-        air_paths = {row[2].normalized_name.casefold() for row in resolved_variants}
-        sff_paths = {row[3].normalized_name.casefold() for row in resolved_variants}
-        if len(air_paths) != 1 or len(sff_paths) != 1:
-            raise ValueError("character DEF variants do not share one AIR/SFF media pair")
-        definition_member, definition, air_member, sff_member = resolved_variants[0]
-        actions = parse_air(
-            archive.read(infos[air_member.archive_index]), reject_duplicate_actions=False
-        )
-        sff_header = inspect_sff_header(archive.read(infos[sff_member.archive_index]))
+        grouped: dict[
+            tuple[str, str],
+            list[tuple[ZipMember, MugenCharacterDefinition, ZipMember, ZipMember]],
+        ] = {}
+        for row in resolved_variants:
+            key = (row[2].normalized_name.casefold(), row[3].normalized_name.casefold())
+            grouped.setdefault(key, []).append(row)
+        decoded_groups = []
+        for key in sorted(grouped):
+            rows = grouped[key]
+            definition_member, definition, air_member, sff_member = rows[0]
+            actions = parse_air(
+                archive.read(infos[air_member.archive_index]), reject_duplicate_actions=False
+            )
+            sff_header = inspect_sff_header(archive.read(infos[sff_member.archive_index]))
+            decoded_groups.append(
+                (rows, definition_member, definition, air_member, sff_member, actions, sff_header)
+            )
 
     executable: list[str] = []
     runtime: list[str] = []
@@ -600,52 +814,87 @@ def audit_character_zip(
             declarative.append(member.normalized_name)
         else:
             other.append(member.normalized_name)
-    return MugenCharacterArchiveAudit(
-        archive_sha256=hashlib.sha256(archive_payload).hexdigest(),
-        archive_bytes=len(archive_payload),
-        inventory_sha256=manifest.inventory_sha256,
-        member_count=len(manifest.members),
-        definition_member=definition_member.normalized_name,
-        definition_members=tuple(row[0].normalized_name for row in resolved_variants),
-        definition_variants=tuple(row[1] for row in resolved_variants),
-        air_member=air_member.normalized_name,
-        sff_member=sff_member.normalized_name,
-        definition=definition,
-        actions=actions,
-        sff_header=sff_header,
-        executable_members=tuple(executable),
-        runtime_logic_members=tuple(runtime),
-        declarative_members=tuple(declarative),
-        unclassified_members=tuple(other),
+    archive_sha256 = hashlib.sha256(archive_payload).hexdigest()
+    return tuple(
+        MugenCharacterArchiveAudit(
+            archive_sha256=archive_sha256,
+            archive_bytes=len(archive_payload),
+            inventory_sha256=manifest.inventory_sha256,
+            member_count=len(manifest.members),
+            definition_member=definition_member.normalized_name,
+            definition_members=tuple(row[0].normalized_name for row in rows),
+            definition_variants=tuple(row[1] for row in rows),
+            air_member=air_member.normalized_name,
+            sff_member=sff_member.normalized_name,
+            definition=definition,
+            actions=actions,
+            sff_header=sff_header,
+            executable_members=tuple(executable),
+            runtime_logic_members=tuple(runtime),
+            declarative_members=tuple(declarative),
+            unclassified_members=tuple(other),
+        )
+        for (
+            rows,
+            definition_member,
+            definition,
+            air_member,
+            sff_member,
+            actions,
+            sff_header,
+        ) in decoded_groups
     )
+
+
+def audit_character_zip(
+    archive_payload: bytes,
+    *,
+    limits: ArchiveLimits | None = None,
+) -> MugenCharacterArchiveAudit:
+    """Audit a ZIP containing exactly one distinct character media pair."""
+
+    variants = audit_character_zip_variants(archive_payload, limits=limits)
+    if len(variants) != 1:
+        raise ValueError(f"character archive contains {len(variants)} AIR/SFF media pairs")
+    return variants[0]
 
 
 def materialize_actions(
     actions: tuple[MugenAirAction, ...],
-    sprites: tuple[MugenSffV1Sprite, ...],
+    sprites: tuple[MugenSffV1Sprite | MugenSffV2Sprite, ...],
 ) -> MugenActionPlan:
     """Render supported AIR actions to aligned, transparent RGBA canvases."""
 
-    by_key: dict[tuple[int, int], list[MugenSffV1Sprite]] = {}
+    by_key: dict[tuple[int, int], list[MugenSffV1Sprite | MugenSffV2Sprite]] = {}
     for sprite in sprites:
         by_key.setdefault((sprite.group_number, sprite.image_number), []).append(sprite)
 
     admitted: list[MugenActionMaterialization] = []
     excluded: list[MugenActionExclusion] = []
-    for action in actions:
+    for source_action_index, action in enumerate(actions):
         if not action.elements:
             excluded.append(
-                MugenActionExclusion(action.action_number, "empty_action", "no elements")
+                MugenActionExclusion(
+                    action.action_number,
+                    "empty_action",
+                    "no elements",
+                    source_action_index,
+                )
             )
             continue
-        resolved: list[tuple[MugenAirElement, MugenSffV1Sprite, int, int, bytes]] = []
+        resolved: list[
+            tuple[MugenAirElement, MugenSffV1Sprite | MugenSffV2Sprite, int, int, bytes]
+        ] = []
         rejection: MugenActionExclusion | None = None
         for element in action.elements:
             key = (element.sprite_group, element.sprite_image)
             candidates = by_key.get(key, [])
             if not candidates:
                 rejection = MugenActionExclusion(
-                    action.action_number, "missing_sprite", f"missing SFF key {key}"
+                    action.action_number,
+                    "missing_sprite",
+                    f"missing SFF key {key}",
+                    source_action_index,
                 )
                 break
             unique_hashes = {candidate.rgba_sha256 for candidate in candidates}
@@ -654,6 +903,7 @@ def materialize_actions(
                     action.action_number,
                     "ambiguous_sprite_key",
                     f"SFF key {key} has {len(unique_hashes)} pixel variants",
+                    source_action_index,
                 )
                 break
             if not element.x_offset.is_integer() or not element.y_offset.is_integer():
@@ -661,6 +911,7 @@ def materialize_actions(
                     action.action_number,
                     "non_integral_offset",
                     f"line {element.source_line} has offset {element.x_offset},{element.y_offset}",
+                    source_action_index,
                 )
                 break
             if len(element.optional_tokens) > 1:
@@ -668,6 +919,7 @@ def materialize_actions(
                     action.action_number,
                     "unsupported_air_transform",
                     f"line {element.source_line} options {element.optional_tokens!r}",
+                    source_action_index,
                 )
                 break
             sprite = candidates[0]
@@ -736,6 +988,7 @@ def materialize_actions(
                 canvas_width=canvas_width,
                 canvas_height=canvas_height,
                 frames=tuple(frames),
+                source_action_index=source_action_index,
             )
         )
     return MugenActionPlan(tuple(admitted), tuple(excluded))
@@ -750,7 +1003,8 @@ def _optional_value(values: dict[str, str], key: str) -> str | None:
     value = values.get(key.casefold())
     if value is None:
         return None
-    normalized = _unquote(value.strip())
+    content, _ = _split_comment(value)
+    normalized = _unquote(content.strip())
     return normalized or None
 
 
@@ -807,28 +1061,263 @@ def _resolve_reference(
     return matches[0]
 
 
+def _bounded_region(payload: bytes, offset: int, size: int, label: str) -> None:
+    if offset < 0 or size < 0 or offset > len(payload) or size > len(payload) - offset:
+        raise ValueError(f"SFF v2 {label} region is out of bounds")
+
+
+def _decode_sff_v2_pixels(
+    payload: bytes,
+    *,
+    width: int,
+    height: int,
+    pixel_format: int,
+    color_depth: int,
+    palette: bytes | None,
+) -> tuple[bytes | None, bytes]:
+    pixel_count = width * height
+    if width <= 0 or height <= 0 or pixel_count > 268_435_456:
+        raise ValueError(f"invalid SFF v2 sprite dimensions: {width}x{height}")
+    indexed: bytes | None = None
+    if pixel_format == 0:
+        if color_depth == 8:
+            if len(payload) != pixel_count:
+                raise ValueError("raw indexed SFF v2 sprite byte count mismatch")
+            indexed = payload
+        elif color_depth == 24:
+            if len(payload) != pixel_count * 3:
+                raise ValueError("raw RGB SFF v2 sprite byte count mismatch")
+            rgb = np.frombuffer(payload, dtype=np.uint8).reshape(pixel_count, 3)
+            rgba = np.empty((pixel_count, 4), dtype=np.uint8)
+            rgba[:, :3] = rgb
+            rgba[:, 3] = 255
+            return None, rgba.tobytes()
+        elif color_depth == 32:
+            if len(payload) != pixel_count * 4:
+                raise ValueError("raw RGBA SFF v2 sprite byte count mismatch")
+            return None, payload
+        else:
+            raise ValueError(f"unsupported raw SFF v2 color depth: {color_depth}")
+    elif pixel_format in {2, 3, 4}:
+        if len(payload) < 4:
+            raise ValueError("compressed SFF v2 sprite lacks its size prefix")
+        declared = struct.unpack_from("<I", payload)[0]
+        compressed = payload[4:]
+        if pixel_format == 2:
+            indexed = _sff_v2_rle8(compressed, pixel_count)
+        elif pixel_format == 3:
+            indexed = _sff_v2_rle5(compressed, pixel_count)
+        else:
+            indexed = _sff_v2_lz5(compressed, pixel_count)
+        if declared not in {0, pixel_count}:
+            raise ValueError(
+                f"SFF v2 decompressed-size prefix {declared} differs from {pixel_count}"
+            )
+    elif pixel_format in {10, 11, 12}:
+        if len(payload) < 4:
+            raise ValueError("PNG SFF v2 sprite lacks its size prefix")
+        try:
+            with Image.open(io.BytesIO(payload[4:])) as image:
+                image.load()
+                if image.size != (width, height):
+                    raise ValueError(
+                        f"SFF v2 PNG size {image.size!r} differs from {(width, height)!r}"
+                    )
+                if pixel_format == 10:
+                    if image.mode != "P":
+                        raise ValueError("SFF v2 PNG8 sprite is not indexed")
+                    indexed = image.tobytes()
+                else:
+                    return None, image.convert("RGBA").tobytes()
+        except (OSError, SyntaxError) as error:
+            raise ValueError(f"invalid embedded SFF v2 PNG: {error}") from error
+    else:
+        raise ValueError(f"unsupported SFF v2 pixel format: {pixel_format}")
+    if indexed is None or len(indexed) != pixel_count:
+        raise ValueError("indexed SFF v2 sprite pixel count mismatch")
+    if palette is None:
+        raise ValueError("indexed SFF v2 sprite has no resolvable palette")
+    return indexed, _sff_v2_indexed_rgba(indexed, palette)
+
+
+def _sff_v2_indexed_rgba(indices: bytes, palette: bytes) -> bytes:
+    if len(palette) % 4:
+        raise ValueError("SFF v2 palette byte count is not RGBA")
+    colors = len(palette) // 4
+    index_array = np.frombuffer(indices, dtype=np.uint8)
+    maximum = int(index_array.max(initial=0))
+    if maximum >= colors:
+        raise ValueError(f"SFF v2 palette index {maximum} exceeds {colors} colors")
+    palette_array = np.frombuffer(palette, dtype=np.uint8).reshape(colors, 4)
+    return np.ascontiguousarray(palette_array[index_array]).tobytes()
+
+
+def _sff_v2_rle8(payload: bytes, pixel_count: int) -> bytes:
+    output = bytearray()
+    cursor = 0
+    while len(output) < pixel_count:
+        if cursor >= len(payload):
+            raise ValueError("truncated SFF v2 RLE8 stream")
+        value = payload[cursor]
+        cursor += 1
+        count = 1
+        if value & 0xC0 == 0x40:
+            count = value & 0x3F
+            if cursor >= len(payload):
+                raise ValueError("truncated SFF v2 RLE8 run")
+            value = payload[cursor]
+            cursor += 1
+        if len(output) + count > pixel_count:
+            raise ValueError("SFF v2 RLE8 run exceeds pixel count")
+        output.extend(bytes((value,)) * count)
+    return bytes(output)
+
+
+def _sff_v2_rle5(payload: bytes, pixel_count: int) -> bytes:
+    output = bytearray()
+    cursor = 0
+    while len(output) < pixel_count:
+        if cursor + 2 > len(payload):
+            raise ValueError("truncated SFF v2 RLE5 packet")
+        run_length = payload[cursor]
+        cursor += 1
+        control = payload[cursor]
+        cursor += 1
+        data_length = control & 0x7F
+        color = 0
+        if control & 0x80:
+            if cursor >= len(payload):
+                raise ValueError("truncated SFF v2 RLE5 color")
+            color = payload[cursor]
+            cursor += 1
+        runs = [(run_length + 1, color)]
+        for _ in range(data_length):
+            if cursor >= len(payload):
+                raise ValueError("truncated SFF v2 RLE5 data run")
+            value = payload[cursor]
+            cursor += 1
+            runs.append(((value >> 5) + 1, value & 0x1F))
+        for count, value in runs:
+            if len(output) + count > pixel_count:
+                raise ValueError("SFF v2 RLE5 run exceeds pixel count")
+            output.extend(bytes((value,)) * count)
+    return bytes(output)
+
+
+def _sff_v2_lz5(payload: bytes, pixel_count: int) -> bytes:
+    if not payload:
+        raise ValueError("empty SFF v2 LZ5 stream")
+    output = bytearray()
+    cursor = 1
+    control = payload[0]
+    control_shift = 0
+    recycled = 0
+    recycled_bits = 0
+    while len(output) < pixel_count:
+        if cursor >= len(payload):
+            raise ValueError("truncated SFF v2 LZ5 packet")
+        value = payload[cursor]
+        cursor += 1
+        if control & (1 << control_shift):
+            if value & 0x3F == 0:
+                if cursor + 2 > len(payload):
+                    raise ValueError("truncated SFF v2 LZ5 long copy")
+                distance = ((value << 2) | payload[cursor]) + 1
+                cursor += 1
+                count = payload[cursor] + 3
+                cursor += 1
+            else:
+                recycled |= (value & 0xC0) >> recycled_bits
+                recycled_bits += 2
+                count = (value & 0x3F) + 1
+                if recycled_bits < 8:
+                    if cursor >= len(payload):
+                        raise ValueError("truncated SFF v2 LZ5 short copy")
+                    distance = payload[cursor] + 1
+                    cursor += 1
+                else:
+                    distance = recycled + 1
+                    recycled = 0
+                    recycled_bits = 0
+            if distance > len(output) or len(output) + count > pixel_count:
+                raise ValueError("invalid SFF v2 LZ5 back-reference")
+            for _ in range(count):
+                output.append(output[-distance])
+        else:
+            if value & 0xE0 == 0:
+                if cursor >= len(payload):
+                    raise ValueError("truncated SFF v2 LZ5 long run")
+                count = payload[cursor] + 8
+                cursor += 1
+                color = value
+            else:
+                count = value >> 5
+                color = value & 0x1F
+            if len(output) + count > pixel_count:
+                raise ValueError("SFF v2 LZ5 run exceeds pixel count")
+            output.extend(bytes((color,)) * count)
+        control_shift += 1
+        if control_shift == 8 and len(output) < pixel_count:
+            if cursor >= len(payload):
+                raise ValueError("truncated SFF v2 LZ5 control byte")
+            control = payload[cursor]
+            cursor += 1
+            control_shift = 0
+    return bytes(output)
+
+
 def _decode_sff_v1_pcx(
     payload: bytes,
     *,
     previous_palette: bytes | None,
     palette_reuse: bool,
 ) -> tuple[bytes, bytes, int, int]:
-    try:
-        with Image.open(io.BytesIO(payload)) as image:
-            image.load()
-            if image.mode not in {"L", "P"}:
-                raise ValueError(f"SFF v1 PCX has unsupported mode {image.mode!r}")
-            width, height = image.size
-            indices = image.tobytes()
-            raw_palette = image.getpalette()
-    except (OSError, SyntaxError) as exc:
-        raise ValueError(f"invalid SFF v1 PCX payload: {exc}") from exc
-    if len(indices) != width * height:
-        raise ValueError("SFF v1 PCX decoded pixel count does not match its dimensions")
-    if raw_palette is not None:
-        palette = bytes(raw_palette[:768])
-        if len(palette) < 768:
-            palette += b"\x00" * (768 - len(palette))
+    if len(payload) < 128 or payload[0] != 0x0A:
+        raise ValueError("invalid SFF v1 PCX header")
+    encoding = payload[2]
+    bits_per_pixel = payload[3]
+    xmin, ymin, xmax, ymax = struct.unpack_from("<4H", payload, 4)
+    if xmax < xmin or ymax < ymin:
+        raise ValueError("invalid SFF v1 PCX bounds")
+    width, height = xmax - xmin + 1, ymax - ymin + 1
+    planes = payload[65]
+    bytes_per_line = struct.unpack_from("<H", payload, 66)[0]
+    if bits_per_pixel != 8 or planes != 1 or bytes_per_line < width:
+        raise ValueError("SFF v1 PCX must be single-plane 8-bit indexed data with a valid stride")
+
+    palette_marker = -1
+    if not palette_reuse and len(payload) >= 897:
+        for candidate in range(len(payload) - 769, 127, -1):
+            if payload[candidate] == 0x0C:
+                palette_marker = candidate
+                break
+    raster_end = palette_marker if palette_marker >= 0 else len(payload)
+    encoded = payload[128:raster_end]
+    expected = bytes_per_line * height
+    decoded = bytearray()
+    cursor = 0
+    while len(decoded) < expected and cursor < len(encoded):
+        value = encoded[cursor]
+        cursor += 1
+        if encoding == 1 and value >= 0xC0:
+            count = value & 0x3F
+            if cursor >= len(encoded):
+                raise ValueError("truncated SFF v1 PCX run")
+            value = encoded[cursor]
+            cursor += 1
+        else:
+            count = 1
+        decoded.extend(bytes((value,)) * min(count, expected - len(decoded)))
+    if len(decoded) != expected:
+        raise ValueError(
+            f"truncated SFF v1 PCX raster: expected {expected} bytes, got {len(decoded)}"
+        )
+    indices = b"".join(
+        bytes(decoded[row * bytes_per_line : row * bytes_per_line + width]) for row in range(height)
+    )
+
+    if palette_marker >= 0:
+        palette = payload[palette_marker + 1 : palette_marker + 769]
     elif palette_reuse and previous_palette is not None:
         palette = previous_palette
     else:
@@ -839,13 +1328,13 @@ def _decode_sff_v1_pcx(
 def _indexed_rgba(indices: bytes, palette: bytes) -> bytes:
     if len(palette) != 768:
         raise ValueError("indexed RGB palette must contain exactly 256 colors")
-    rgba = bytearray(len(indices) * 4)
-    for output, index in enumerate(indices):
-        palette_offset = index * 3
-        rgba_offset = output * 4
-        rgba[rgba_offset : rgba_offset + 3] = palette[palette_offset : palette_offset + 3]
-        rgba[rgba_offset + 3] = 0 if index == 0 else 255
-    return bytes(rgba)
+    palette_array = np.frombuffer(palette, dtype=np.uint8).reshape(256, 3)
+    index_array = np.frombuffer(indices, dtype=np.uint8)
+    rgba = np.empty((len(indices), 4), dtype=np.uint8)
+    rgba[:, :3] = palette_array[index_array]
+    rgba[:, 3] = 255
+    rgba[index_array == 0, 3] = 0
+    return rgba.tobytes()
 
 
 def _flip_rgba(
