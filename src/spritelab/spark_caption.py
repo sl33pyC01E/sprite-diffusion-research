@@ -130,12 +130,15 @@ def structured_training_prompt(
     caption: Mapping[str, str | Sequence[str]],
     *,
     entity_class: str,
+    include_pose_and_facing: bool = True,
 ) -> str:
     """Convert validated visible facts into the still generator's canonical text prompt."""
 
     validated = parse_structured_caption(json.dumps(dict(caption)))
     if not isinstance(entity_class, str) or not entity_class.strip():
         raise ValueError("entity_class must be non-empty text")
+    if not isinstance(include_pose_and_facing, bool):
+        raise TypeError("include_pose_and_facing must be a boolean")
     pieces = ["2D sprite on a transparent background"]
     subject = _join_nonempty(
         [
@@ -146,9 +149,7 @@ def structured_training_prompt(
     )
     if subject:
         pieces.append(subject)
-    for field in (
-        "pose",
-        "facing",
+    fields = (
         "skin_or_surface",
         "hair",
         "face",
@@ -158,7 +159,10 @@ def structured_training_prompt(
         "armor",
         "accessories",
         "equipment",
-    ):
+    )
+    if include_pose_and_facing:
+        fields = ("pose", "facing", *fields)
+    for field in fields:
         value = validated[field]
         text = ", ".join(value) if isinstance(value, list) else value
         if text:

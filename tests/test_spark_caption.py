@@ -46,6 +46,11 @@ def test_structured_caption_normalizes_and_builds_visual_only_prompt() -> None:
     assert "humanoid, tall and lean" in prompt
     assert "red shoulder guard" in prompt
     assert "possible narrow cape" not in prompt
+    appearance = structured_training_prompt(
+        parsed, entity_class="humanoid", include_pose_and_facing=False
+    )
+    assert "standing with one fist raised" not in appearance
+    assert "three-quarter right" not in appearance
 
 
 def test_caption_parser_rejects_schema_drift_and_non_json() -> None:
