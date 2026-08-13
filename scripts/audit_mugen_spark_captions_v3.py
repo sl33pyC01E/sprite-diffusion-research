@@ -16,7 +16,7 @@ MANIFEST = (
     ROOT / "data/processed/mugen-mffa-canonical-still-captions-v3-spark-qwen35-122b/manifest.json"
 )
 TOKENIZER = ROOT / "data/models/stable-diffusion-v1-4-eb7ecef2ce03-training-components/tokenizer"
-OUTPUT = ROOT / "data/index/reports/mugen-mffa-spark-caption-v3-audit-v1"
+OUTPUT = ROOT / "data/index/reports/mugen-mffa-spark-caption-v3-audit-v2"
 
 
 def main() -> None:

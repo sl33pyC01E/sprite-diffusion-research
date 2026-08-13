@@ -19,6 +19,22 @@ class CaptionAuditError(ValueError):
     """Raised when the caption manifest or its referenced evidence differs."""
 
 
+_GENERIC_PROVENANCE_LABELS = {
+    "black",
+    "blue",
+    "brown",
+    "gray",
+    "green",
+    "index",
+    "orange",
+    "pink",
+    "purple",
+    "red",
+    "white",
+    "yellow",
+}
+
+
 def build_caption_audit(
     manifest_path: Path | str,
     tokenizer_directory: Path | str,
@@ -102,18 +118,27 @@ def build_caption_audit(
         structured_text = json.dumps(structured, ensure_ascii=False).casefold()
         training_prompt = str(record.get("training_prompt", "")).casefold()
         response_text = json.dumps(record.get("model_response", {}), ensure_ascii=False).casefold()
-        if len(label_normalized) >= 4 and (
+        label_is_distinctive = (
+            len(label_normalized) >= 4 and label_normalized not in _GENERIC_PROVENANCE_LABELS
+        )
+        if label_is_distinctive and (
             label_normalized in structured_text or label_normalized in training_prompt
         ):
             identity_leakage.append(identity_id)
-        if len(label_normalized) >= 4 and label_normalized in response_text:
+        if label_is_distinctive and label_normalized in response_text:
             reasoning_identity_mentions.append(identity_id)
         uncertain = structured.get("uncertain_visible_features")
         if isinstance(uncertain, list):
+            certain_structure = dict(structured)
+            certain_structure.pop("uncertain_visible_features", None)
+            certain_text = json.dumps(certain_structure, ensure_ascii=False).casefold()
             leaked = [
                 value
                 for value in uncertain
-                if isinstance(value, str) and value.strip() and value.casefold() in training_prompt
+                if isinstance(value, str)
+                and value.strip()
+                and value.casefold() in training_prompt
+                and value.casefold() not in certain_text
             ]
             if leaked:
                 uncertain_prompt_leakage.append({"identity_id": identity_id, "values": leaked})
