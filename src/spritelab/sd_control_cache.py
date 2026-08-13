@@ -72,6 +72,19 @@ def export_sd14_rgb_latent_cache(
     _verify_model_files(model_root, source_index)
     plan_bytes = plan_file.read_bytes()
     plan = _json_object(plan_bytes, "training plan")
+    plan_source = plan.get("source")
+    if not isinstance(plan_source, dict):
+        raise SDControlCacheError("training plan source contract is missing")
+    materialization_path_value = plan_source.get("materialization_path")
+    materialization_sha256 = plan_source.get("materialization_file_sha256")
+    if not isinstance(materialization_path_value, str) or not isinstance(
+        materialization_sha256, str
+    ):
+        raise SDControlCacheError("training plan materialization evidence is invalid")
+    materialization_path = Path(materialization_path_value).resolve()
+    if _file_sha256(materialization_path) != materialization_sha256:
+        raise SDControlCacheError("training plan materialization file differs")
+    materialization_root = materialization_path.parent
     records = plan.get("records")
     expected_count = (
         plan.get("counts", {}).get("sequences") if isinstance(plan.get("counts"), dict) else None
@@ -109,8 +122,8 @@ def export_sd14_rgb_latent_cache(
             if not isinstance(target, dict):
                 raise SDControlCacheError(f"target is missing for {sequence_id}")
             relative = _required_text(target, "relative_path")
-            target_path = (plan_file.parent / relative).resolve()
-            if plan_file.parent not in target_path.parents:
+            target_path = (materialization_root / relative).resolve()
+            if materialization_root not in target_path.parents:
                 raise SDControlCacheError(f"target path escapes plan root for {sequence_id}")
             payload = target_path.read_bytes()
             if hashlib.sha256(payload).hexdigest() != target.get("file_sha256"):
