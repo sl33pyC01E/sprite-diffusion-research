@@ -12,6 +12,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from spritelab.mugen_stills import (  # noqa: E402
+    MugenStillReference,
     compose_caption_input,
     load_mugen_still_references,
 )
@@ -41,6 +43,12 @@ MODEL_REVISION = "49d19c108259a21450c40b8af38828b0a97390d8"
 SERVED_MODEL = "qwen3.5-122b"
 
 
+class CaptionValidationFailure(ValueError):
+    def __init__(self, message: str, failure_record: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.failure_record = failure_record
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:18000/v1")
@@ -48,11 +56,14 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--request-timeout", type=float, default=180.0)
+    parser.add_argument("--workers", type=int, default=2)
     args = parser.parse_args()
     if args.limit is not None and args.limit <= 0:
         raise ValueError("--limit must be positive")
     if args.request_timeout <= 0:
         raise ValueError("--request-timeout must be positive")
+    if args.workers not in {1, 2}:
+        raise ValueError("--workers must be 1 or 2 for the pinned Spark service")
     references = load_mugen_still_references(MATERIALIZATION, TAXONOMY)
     if args.limit is not None:
         references = references[: args.limit]
@@ -65,6 +76,7 @@ def main() -> None:
         "prompt_sha256": caption_prompt_sha256(),
         "reference_count": len(references),
         "served_model": SERVED_MODEL,
+        "workers": args.workers,
     }
     if args.preflight_only:
         print(json.dumps(preflight, sort_keys=True))
@@ -83,87 +95,35 @@ def main() -> None:
     completed = _load_journal(journal_path)
     pending = [reference for reference in references if reference.identity_id not in completed]
     endpoint = args.base_url.rstrip("/") + "/chat/completions"
-    with journal_path.open("a", encoding="utf-8", newline="\n") as journal:
-        for index, reference in enumerate(pending, start=1):
-            input_payload = _caption_input_png(reference.rgba)
-            input_sha256 = hashlib.sha256(input_payload).hexdigest()
-            input_path = input_dir / f"{reference.identity_id}-{input_sha256[:12]}.png"
-            if input_path.exists():
-                if _file_sha256(input_path) != input_sha256:
-                    raise RuntimeError(f"existing caption input hash mismatch: {input_path}")
-            else:
-                with input_path.open("xb") as handle:
-                    handle.write(input_payload)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            data_url = "data:image/png;base64," + base64.b64encode(input_payload).decode("ascii")
-            request = openai_vision_request(model=SERVED_MODEL, png_data_url=data_url)
-            request_payload = canonical_json_bytes(request)
-            response_payload = _post_json(
-                endpoint,
-                request_payload,
+    with (
+        journal_path.open("a", encoding="utf-8", newline="\n") as journal,
+        ThreadPoolExecutor(max_workers=args.workers) as executor,
+    ):
+        futures: dict[Future[dict[str, Any]], MugenStillReference] = {
+            executor.submit(
+                _caption_reference,
+                reference,
+                output=output,
+                input_dir=input_dir,
+                endpoint=endpoint,
                 timeout=args.request_timeout,
-                attempts=3,
-            )
-            response = _json_object(response_payload, "caption service response")
-            content = _response_content(response)
+            ): reference
+            for reference in pending
+        }
+        for index, future in enumerate(as_completed(futures), start=1):
+            reference = futures[future]
             try:
-                structured = parse_structured_caption(content)
-            except ValueError as error:
-                _append_failure(
-                    failure_journal_path,
-                    {
-                        "error": str(error),
-                        "identity_id": reference.identity_id,
-                        "model_response": response,
-                        "model_response_file_sha256": hashlib.sha256(response_payload).hexdigest(),
-                        "request_body_sha256": hashlib.sha256(request_payload).hexdigest(),
-                    },
-                )
+                record = future.result()
+            except CaptionValidationFailure as error:
+                _append_failure(failure_journal_path, error.failure_record)
                 raise
-            record = {
-                "alpha_bbox_xywh": list(reference.alpha_bbox_xywh)
-                if reference.alpha_bbox_xywh is not None
-                else None,
-                "caption_input": {
-                    "file_sha256": input_sha256,
-                    "relative_path": input_path.relative_to(output).as_posix(),
-                    "resize": "512x512_nearest_neighbor",
-                    "rgba_composite_background_rgb": [127, 127, 127],
-                    "size_bytes": len(input_payload),
-                },
-                "caption_source": "remote_model_generated_unverified_literal_visual",
-                "entity_class": reference.entity_class,
-                "frame_index": reference.frame_index,
-                "identity_id": reference.identity_id,
-                "identity_label_provenance_only": reference.identity_label,
-                "legacy_action": reference.legacy_action,
-                "model_response": response,
-                "model_response_file_sha256": hashlib.sha256(response_payload).hexdigest(),
-                "palette_facts": [
-                    {"fraction": fraction, "name": name}
-                    for name, fraction in reference.palette_facts
-                ],
-                "reference_array_sha256": reference.reference_array_sha256,
-                "request_body_sha256": hashlib.sha256(request_payload).hexdigest(),
-                "sequence_id": reference.sequence_id,
-                "source_array_sha256": reference.source_array_sha256,
-                "source_file_sha256": reference.source_file_sha256,
-                "split": reference.split,
-                "structured_caption": structured,
-                "structured_verb": reference.structured_verb,
-                "training_prompt": structured_training_prompt(
-                    structured, entity_class=reference.entity_class
-                ),
-                "visible_pixel_count": reference.visible_pixel_count,
-            }
             journal.write(canonical_json_bytes(record).decode("utf-8"))
             journal.flush()
             os.fsync(journal.fileno())
             print(
                 json.dumps(
                     {
-                        "captioned": index,
+                        "captioned": len(completed) + index,
                         "identity_id": reference.identity_id,
                         "remaining": len(pending) - index,
                         "training_prompt": record["training_prompt"],
@@ -224,6 +184,84 @@ def main() -> None:
             sort_keys=True,
         )
     )
+
+
+def _caption_reference(
+    reference: MugenStillReference,
+    *,
+    output: Path,
+    input_dir: Path,
+    endpoint: str,
+    timeout: float,
+) -> dict[str, Any]:
+    input_payload = _caption_input_png(reference.rgba)
+    input_sha256 = hashlib.sha256(input_payload).hexdigest()
+    input_path = input_dir / f"{reference.identity_id}-{input_sha256[:12]}.png"
+    if input_path.exists():
+        if _file_sha256(input_path) != input_sha256:
+            raise RuntimeError(f"existing caption input hash mismatch: {input_path}")
+    else:
+        with input_path.open("xb") as handle:
+            handle.write(input_payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    data_url = "data:image/png;base64," + base64.b64encode(input_payload).decode("ascii")
+    request = openai_vision_request(model=SERVED_MODEL, png_data_url=data_url)
+    request_payload = canonical_json_bytes(request)
+    response_payload = _post_json(
+        endpoint,
+        request_payload,
+        timeout=timeout,
+        attempts=3,
+    )
+    response = _json_object(response_payload, "caption service response")
+    content = _response_content(response)
+    try:
+        structured = parse_structured_caption(content)
+    except ValueError as error:
+        failure_record = {
+            "error": str(error),
+            "identity_id": reference.identity_id,
+            "model_response": response,
+            "model_response_file_sha256": hashlib.sha256(response_payload).hexdigest(),
+            "request_body_sha256": hashlib.sha256(request_payload).hexdigest(),
+        }
+        raise CaptionValidationFailure(str(error), failure_record) from error
+    return {
+        "alpha_bbox_xywh": list(reference.alpha_bbox_xywh)
+        if reference.alpha_bbox_xywh is not None
+        else None,
+        "caption_input": {
+            "file_sha256": input_sha256,
+            "relative_path": input_path.relative_to(output).as_posix(),
+            "resize": "512x512_nearest_neighbor",
+            "rgba_composite_background_rgb": [127, 127, 127],
+            "size_bytes": len(input_payload),
+        },
+        "caption_source": "remote_model_generated_unverified_literal_visual",
+        "entity_class": reference.entity_class,
+        "frame_index": reference.frame_index,
+        "identity_id": reference.identity_id,
+        "identity_label_provenance_only": reference.identity_label,
+        "legacy_action": reference.legacy_action,
+        "model_response": response,
+        "model_response_file_sha256": hashlib.sha256(response_payload).hexdigest(),
+        "palette_facts": [
+            {"fraction": fraction, "name": name} for name, fraction in reference.palette_facts
+        ],
+        "reference_array_sha256": reference.reference_array_sha256,
+        "request_body_sha256": hashlib.sha256(request_payload).hexdigest(),
+        "sequence_id": reference.sequence_id,
+        "source_array_sha256": reference.source_array_sha256,
+        "source_file_sha256": reference.source_file_sha256,
+        "split": reference.split,
+        "structured_caption": structured,
+        "structured_verb": reference.structured_verb,
+        "training_prompt": structured_training_prompt(
+            structured, entity_class=reference.entity_class
+        ),
+        "visible_pixel_count": reference.visible_pixel_count,
+    }
 
 
 def _caption_input_png(rgba) -> bytes:
