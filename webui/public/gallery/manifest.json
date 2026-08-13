@@ -1,0 +1,39 @@
+{
+  "artifact_kind": "spritelab_web_gallery_manifest",
+  "schema_version": 1,
+  "published_at": "2026-08-12",
+  "claim_scope": "Display derivatives from exact in-sample research requests; not held-out or open-vocabulary generation.",
+  "runs": {
+    "tmwa_causal16_step_2000": {
+      "checkpoint_sha256": "5b944cb24ded9a046a2e3d7af7a8d2264eb673added068f5f6218039d19cf8c8",
+      "preview_index_sha256": "675660ca488f45d81f843efe2b490c8a10e577be39cb4244370ce531bc22b176",
+      "native_shape": [8, 64, 64, 4],
+      "display_size": [256, 256]
+    },
+    "fetid_rat_step_1500_endpoint_palette32": {
+      "checkpoint_sha256": "f80c794f1c8a1f9f62d26e247a6385c04603f8a308cb8db7c73e7e0d53305684",
+      "inference_report_sha256": "27cedd68d6aafe7df79de2cf6b63b57308458919722f7dcbbf868d7e47692cbe",
+      "native_shape": [8, 32, 32, 4],
+      "display_size": [128, 128],
+      "display_transform": "hard alpha 192; clip-global adaptive palette capped at 32 colors; no dither"
+    }
+  },
+  "files": [
+    { "path": "fetid-rat-attack.png", "sha256": "e8d18770050f1e4daf4ea900c4facc6a2e83a286ef88d1ac51a51ae2a367fe4f", "bytes": 14285, "run": "fetid_rat_step_1500_endpoint_palette32", "role": "generated", "identity": "Fetid Rat", "action": "attack" },
+    { "path": "fetid-rat-death.png", "sha256": "e15dff3d41a46665455548c9e1b35022ff5bb65d3df36a7d5ab197093a50505d", "bytes": 14876, "run": "fetid_rat_step_1500_endpoint_palette32", "role": "generated", "identity": "Fetid Rat", "action": "death" },
+    { "path": "fetid-rat-idle.png", "sha256": "4c80a2563acaa492ba51574e0200d3537218bb8f69c78101953e90c555f993db", "bytes": 14475, "run": "fetid_rat_step_1500_endpoint_palette32", "role": "generated", "identity": "Fetid Rat", "action": "idle" },
+    { "path": "fetid-rat-run.png", "sha256": "83b26d44036e734b8ad70fcaa51948535eaa9f41dea1a29126449907973dbdf6", "bytes": 14960, "run": "fetid_rat_step_1500_endpoint_palette32", "role": "generated", "identity": "Fetid Rat", "action": "run" },
+    { "path": "logmonster-walk-endpoint.png", "sha256": "0eafb724b02b415905357294aa609f53b4522390c63c20fa2192ee38e5de3ec8", "bytes": 120401, "run": "tmwa_causal16_step_2000", "role": "endpoint", "identity": "Logmonster", "action": "walk" },
+    { "path": "logmonster-walk-target.png", "sha256": "443e2dbd341fc58ef9f32df53d2b0e41f05b70b922acc803531f3018c15b66a1", "bytes": 34714, "run": "tmwa_causal16_step_2000", "role": "target", "identity": "Logmonster", "action": "walk" },
+    { "path": "penguin-walk-endpoint.png", "sha256": "cb29688d436c7fb2b44ea98535da3f2c1c496a965bc4fddd93db8d761656e192", "bytes": 122746, "run": "tmwa_causal16_step_2000", "role": "endpoint", "identity": "Penguin", "action": "walk" },
+    { "path": "penguin-walk-euler.png", "sha256": "7738e90bb2be2cd47c89f20de7ad7f0ac11b8d3d7ee6186eaf4bc630ce07eb91", "bytes": 137010, "run": "tmwa_causal16_step_2000", "role": "euler", "identity": "Penguin", "action": "walk" },
+    { "path": "penguin-walk-target.png", "sha256": "f7b539c876d806a310a3536a74d87c83b0d2b1e5d3c4bf94e15fc6b6296a5e76", "bytes": 13595, "run": "tmwa_causal16_step_2000", "role": "target", "identity": "Penguin", "action": "walk" },
+    { "path": "sasquatch-idle-endpoint.png", "sha256": "e81de6d14c87f2fae6095c79c3072e1e48548d0516e88623091a7c573b973595", "bytes": 143005, "run": "tmwa_causal16_step_2000", "role": "endpoint", "identity": "Sasquatch", "action": "idle" },
+    { "path": "sasquatch-idle-target.png", "sha256": "30c81fbd8b1bce3554509043b2f885d40db1bcf92a17daceef27a5f32b3c59d4", "bytes": 34284, "run": "tmwa_causal16_step_2000", "role": "target", "identity": "Sasquatch", "action": "idle" },
+    { "path": "sasquatch-walk-endpoint.png", "sha256": "717271e1090f453d7f7fa186eef774061c024f2d4167516673ceca4c2db5063d", "bytes": 142226, "run": "tmwa_causal16_step_2000", "role": "endpoint", "identity": "Sasquatch", "action": "walk" },
+    { "path": "sasquatch-walk-euler.png", "sha256": "62fe87450fec5c313d601793e5220e8cc86402ce363b9f1e108cb30fb10a8ce1", "bytes": 156479, "run": "tmwa_causal16_step_2000", "role": "euler", "identity": "Sasquatch", "action": "walk" },
+    { "path": "sasquatch-walk-target.png", "sha256": "4200b9b08f9603a7bf001a93ee82ecf1dd3162044d0a6521b9e7bcbd4078bbf8", "bytes": 35080, "run": "tmwa_causal16_step_2000", "role": "target", "identity": "Sasquatch", "action": "walk" },
+    { "path": "skull-ice-walk-endpoint.png", "sha256": "6078edb46d4e0c79ae2f7b133bce7db37e022c7cc0653d51ddb8975bb9bbf401", "bytes": 98716, "run": "tmwa_causal16_step_2000", "role": "endpoint", "identity": "Ice skull", "action": "walk" },
+    { "path": "skull-ice-walk-target.png", "sha256": "9c1f8873598f9932a97936dbd344bc99b639f3142bf6f1ca281913b5718e9260", "bytes": 10984, "run": "tmwa_causal16_step_2000", "role": "target", "identity": "Ice skull", "action": "walk" }
+  ]
+}

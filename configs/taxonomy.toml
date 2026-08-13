@@ -1,0 +1,117 @@
+version = "1.0"
+
+# Keep raw source labels in the index. These names are the stable conditioning
+# vocabulary used to join heterogeneous packs and sites.
+[entity_classes]
+values = [
+  "humanoid",
+  "animal",
+  "creature",
+  "monster",
+  "robot",
+  "vehicle",
+  "object",
+  "effect",
+  "environment",
+  "unknown",
+]
+
+[entity_aliases]
+person = "humanoid"
+human = "humanoid"
+character = "humanoid"
+npc = "humanoid"
+quadruped = "animal"
+bird = "animal"
+fish = "animal"
+beast = "creature"
+enemy = "monster"
+mech = "robot"
+automaton = "robot"
+projectile = "effect"
+particle = "effect"
+prop = "object"
+
+[action_families]
+stationary = ["idle", "crouch", "sleep"]
+locomotion = [
+  "walk", "run", "sprint", "crawl", "jump", "fall", "land", "climb",
+  "swim", "fly", "hover", "burrow",
+]
+combat = [
+  "attack", "attack_melee", "attack_ranged", "shoot", "cast", "defend",
+  "dodge", "hurt", "death",
+]
+interaction = [
+  "interact", "use", "work", "carry", "push", "pull", "eat", "drink",
+  "talk",
+]
+expression = ["emote", "dance", "celebrate", "laugh", "cry"]
+transition = ["spawn", "despawn", "transform"]
+other = ["other", "unknown"]
+
+[action_aliases]
+stand = "idle"
+standing = "idle"
+breath = "idle"
+walking = "walk"
+running = "run"
+dash = "sprint"
+leap = "jump"
+airborne = "fall"
+landing = "land"
+melee = "attack_melee"
+slash = "attack_melee"
+stab = "attack_melee"
+punch = "attack_melee"
+kick = "attack_melee"
+fire = "attack_ranged"
+bow = "attack_ranged"
+gun = "shoot"
+magic = "cast"
+spell = "cast"
+block = "defend"
+hit = "hurt"
+damage = "hurt"
+die = "death"
+dead = "death"
+gesture = "emote"
+taunt = "emote"
+cheer = "celebrate"
+
+[loop_defaults]
+idle = true
+walk = true
+run = true
+sprint = true
+crawl = true
+climb = true
+swim = true
+fly = true
+hover = true
+burrow = true
+sleep = true
+dance = true
+emote = false
+attack = false
+attack_melee = false
+attack_ranged = false
+shoot = false
+cast = false
+hurt = false
+death = false
+spawn = false
+despawn = false
+transform = false
+
+[views]
+values = [
+  "side", "front", "back", "three_quarter", "top_down", "isometric",
+  "platformer", "unknown",
+]
+
+[directions]
+values = [
+  "left", "right", "up", "down", "up_left", "up_right", "down_left",
+  "down_right", "none", "unknown",
+]

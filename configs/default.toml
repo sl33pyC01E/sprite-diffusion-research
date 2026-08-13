@@ -1,0 +1,19 @@
+[storage]
+data_root = "data"
+min_free_gib = 100.0
+download_chunk_mib = 1
+
+[network]
+user_agent = "SpriteDiffusionResearch/0.1 (+local noncommercial research; provenance indexed)"
+timeout_seconds = 60
+max_retries = 4
+default_requests_per_second = 0.5
+
+[index]
+database = "index/spritelab.sqlite3"
+
+[normalization]
+default_width = 64
+default_height = 64
+default_frames = 8
+resampling = "nearest"
