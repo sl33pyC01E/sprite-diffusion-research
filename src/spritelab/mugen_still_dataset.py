@@ -9,7 +9,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from spritelab.spark_caption import canonical_json_bytes, structured_training_prompt
+from spritelab.spark_caption import canonical_json_bytes
 from spritelab.storage import DiskGuard
 
 _ACTION_PHRASES = {
@@ -45,6 +45,81 @@ def action_phrase(verb: str) -> str:
         return _ACTION_PHRASES[verb]
     except KeyError as error:
         raise ValueError(f"unsupported MUGEN still action verb: {verb}") from error
+
+
+def compact_appearance_prompt(
+    structured: dict[str, Any],
+    *,
+    entity_class: str,
+    maximum_words: int = 44,
+) -> str:
+    """Render dense appearance facts for CLIP without duplicative prose.
+
+    The remote VLM intentionally emits redundant evidence fields.  Stable
+    Diffusion 1.x CLIP has only 77 tokens, so this projection keeps whole,
+    priority-ordered facts and stops before a conservative whitespace-word
+    budget.  It never slices a phrase or silently tokenizer-truncates it.
+    """
+
+    if not isinstance(structured, dict):
+        raise ValueError("structured caption must be an object")
+    if not isinstance(entity_class, str) or not entity_class.strip():
+        raise ValueError("entity_class must be non-empty text")
+    if isinstance(maximum_words, bool) or not isinstance(maximum_words, int):
+        raise ValueError("maximum_words must be an integer")
+    if maximum_words < 16:
+        raise ValueError("maximum_words must be at least 16")
+
+    candidates: list[str] = ["pixel art sprite", "transparent background", entity_class]
+    for key in (
+        "subject_type",
+        "body_build",
+        "skin_or_surface",
+        "hair",
+        "face",
+        "upper_body_clothing",
+        "lower_body_clothing",
+        "footwear",
+        "armor",
+    ):
+        value = structured.get(key)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value.strip())
+    for key, limit in (
+        ("equipment", 2),
+        ("accessories", 2),
+        ("distinctive_visible_features", 2),
+    ):
+        value = structured.get(key)
+        if isinstance(value, list):
+            candidates.extend(
+                item.strip() for item in value[:limit] if isinstance(item, str) and item.strip()
+            )
+    colors = []
+    for key in ("dominant_colors", "secondary_colors"):
+        value = structured.get(key)
+        if isinstance(value, list):
+            colors.extend(item.strip() for item in value if isinstance(item, str) and item.strip())
+    if colors:
+        candidates.append("colors " + " ".join(dict.fromkeys(colors[:6])))
+
+    selected: list[str] = []
+    normalized: list[str] = []
+    word_count = 0
+    for candidate in candidates:
+        phrase = " ".join(candidate.split())
+        lowered = phrase.casefold()
+        if not phrase or any(lowered == prior or lowered in prior for prior in normalized):
+            continue
+        words = len(phrase.split())
+        if word_count + words > maximum_words:
+            continue
+        selected.append(phrase)
+        normalized.append(lowered)
+        word_count += words
+    if not selected:
+        raise ValueError("structured caption contains no promptable appearance facts")
+    return "; ".join(selected)
 
 
 def build_mugen_still_training_plan(
@@ -119,12 +194,8 @@ def build_mugen_still_training_plan(
             ("caption request", request_sha256),
         ):
             _validate_sha256(digest, f"{identity_id} {label}")
-        appearance = structured_training_prompt(
-            structured,
-            entity_class=entity_class,
-            include_pose_and_facing=False,
-        ).rstrip(".")
-        prompt = f"{appearance}. {action_phrase(verb)}. {view} view."
+        appearance = compact_appearance_prompt(structured, entity_class=entity_class)
+        prompt = f"{appearance}; {action_phrase(verb)}; {view} view"
         prompts.add(prompt)
         target = sequence.get("output")
         if not isinstance(target, dict):

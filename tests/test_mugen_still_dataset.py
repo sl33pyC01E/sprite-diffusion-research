@@ -5,7 +5,11 @@ import json
 
 import pytest
 
-from spritelab.mugen_still_dataset import action_phrase, build_mugen_still_training_plan
+from spritelab.mugen_still_dataset import (
+    action_phrase,
+    build_mugen_still_training_plan,
+    compact_appearance_prompt,
+)
 
 
 def _digest(value: str) -> str:
@@ -104,3 +108,29 @@ def test_action_phrase_rejects_unknown() -> None:
     assert action_phrase("block") == "blocking in a defensive stance"
     with pytest.raises(ValueError, match="unsupported"):
         action_phrase("dance")
+
+
+def test_compact_prompt_keeps_whole_priority_facts_without_duplicates() -> None:
+    structured = {
+        "subject_type": "humanoid",
+        "body_build": "slender humanoid",
+        "skin_or_surface": "armored black and red surface",
+        "hair": "",
+        "face": "red helmet",
+        "upper_body_clothing": "black and red armor with white trim",
+        "lower_body_clothing": "black pants with red lining",
+        "footwear": "black boots",
+        "armor": "black and red armor with white trim",
+        "equipment": ["long silver sword"],
+        "accessories": ["gold buckle"],
+        "distinctive_visible_features": ["red helmet", "white eye design"],
+        "dominant_colors": ["black", "red", "white"],
+        "secondary_colors": ["gold"],
+    }
+
+    prompt = compact_appearance_prompt(structured, entity_class="humanoid", maximum_words=32)
+
+    assert len(prompt.split()) <= 32
+    assert prompt.count("black and red armor with white trim") == 1
+    assert "long silver sword" in prompt
+    assert not prompt.endswith(";")

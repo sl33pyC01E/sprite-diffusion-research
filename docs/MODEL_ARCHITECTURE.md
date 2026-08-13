@@ -544,3 +544,13 @@ that lack the field load as `1.0`; new checkpoints record it explicitly. The
 evidence that this tiny case was optimization-limited rather than capacity-saturated.
 It does not establish sufficient capacity for the broad multi-identity corpus, and no
 semantic-generalization claim follows from this continuation.
+### Quality-first scratch latent still trainer
+
+`spritelab.latent_still_train` joins the immutable sequence plan, frozen
+2x-RGBA latent cache, and frozen 77x768 CLIP token-state cache.  Sampling is
+hierarchical (identity, structured verb, sequence, frame), so a prolific
+fighter or animation cannot dominate by raw frame count.  The trainer uses a
+single rectified-flow pass with an explicit 25% pure-noise endpoint mixture,
+10% classifier-free text dropout, BF16 activations, FP32 parameters, EMA, and
+identity-disjoint validation.  Periodic safe-loadable checkpoints retain the
+optimizer and all sampler/flow/dropout RNG states for power-loss continuation.
