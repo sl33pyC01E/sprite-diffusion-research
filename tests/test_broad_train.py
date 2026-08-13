@@ -76,6 +76,8 @@ def test_broad_config_rejects_invalid_geometry_and_schedule() -> None:
         BroadTrainingConfig(steps=10, warmup_steps=10)
     with pytest.raises(ValueError, match="minimum_learning_rate"):
         BroadTrainingConfig(learning_rate=1e-4, minimum_learning_rate=2e-4)
+    with pytest.raises(ValueError, match="horizontal_flip_probability"):
+        BroadTrainingConfig(horizontal_flip_probability=1.1)
 
 
 def _fixture_manifest(tmp_path: Path) -> Path:
@@ -165,6 +167,7 @@ def test_one_step_cpu_training_exports_resume_and_inference_checkpoints(
             max_text_bytes=8,
             batch_size=1,
             gradient_accumulation=1,
+            horizontal_flip_probability=1.0,
             learning_rate=1e-4,
             minimum_learning_rate=1e-5,
             warmup_steps=0,

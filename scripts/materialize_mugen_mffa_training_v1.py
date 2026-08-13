@@ -209,6 +209,27 @@ def _description(audit: object, resource: dict[str, object]) -> str:
     return "anime fighting character"
 
 
+def _entity_class(description: str) -> str:
+    tokens = {token.strip("-_!?.'\"") for token in description.casefold().replace("/", " ").split()}
+    if tokens & {"android", "gundam", "mecha", "mechazawa", "robot", "transformer"}:
+        return "robot"
+    if tokens & {
+        "bear",
+        "bird",
+        "cat",
+        "dog",
+        "dragon",
+        "gamera",
+        "godzilla",
+        "kaiju",
+        "monster",
+        "penguin",
+        "wolf",
+    }:
+        return "creature"
+    return "humanoid"
+
+
 def _materialize_variant(
     item: dict[str, object],
     payload: bytes,
@@ -216,7 +237,9 @@ def _materialize_variant(
     *,
     guard: DiskGuard,
     sequence_rows: dict[str, dict[str, object]],
+    source_archive_sha256: str | None = None,
 ) -> tuple[int, Counter[str]]:
+    archive_sha256 = source_archive_sha256 or audit.archive_sha256
     sff_payload = _member_bytes(payload, audit.sff_member)
     if audit.sff_header.format_family == "sff_v1":
         sprites = decode_sff_v1(
@@ -238,6 +261,7 @@ def _materialize_variant(
     ]
     plan = materialize_actions(tuple(action for _, action in selected), sprites)
     description = _description(audit, item["resource"])
+    entity_class = _entity_class(description)
     counts: Counter[str] = Counter()
     retained_by_action: Counter[str] = Counter()
     retained_hashes: dict[str, set[str]] = {}
@@ -300,11 +324,11 @@ def _materialize_variant(
         retained_by_action[label] += 1
         retained_hashes[label].add(array_sha256)
         normalized_action = ACTION_MAP.get(action.normalized_action, action.normalized_action)
-        identity_id = f"mugen_{audit.archive_sha256[:16]}_{audit.sff_header.sha256[:16]}"
+        identity_id = f"mugen_{archive_sha256[:16]}_{audit.sff_header.sha256[:16]}"
         stable = {
             "action_number": action.action_number,
             "air_sha256": air_sha256,
-            "archive_sha256": audit.archive_sha256,
+            "archive_sha256": archive_sha256,
             "source_action_index": source_index,
             "sff_sha256": audit.sff_header.sha256,
         }
@@ -341,20 +365,20 @@ def _materialize_variant(
                 "description": description,
                 "description_basis": "internal_def_display_or_name",
                 "direction": "unknown",
-                "entity_class": "humanoid",
+                "entity_class": entity_class,
                 "identity_label": description,
                 "loop_mode": "loop",
                 "sequence_id": sequence_id,
                 "source_prompt": None,
                 "source_prompt_scope": None,
                 "text": (
-                    f"{description}, humanoid entity, {normalized_action} action, "
+                    f"{description}, {entity_class} entity, {normalized_action} action, "
                     "looping animation, transparent background, pixel art animated sprite"
                 ),
                 "view": "side",
             },
             "direction": "unknown",
-            "entity_class": "humanoid",
+            "entity_class": entity_class,
             "frame_count": TARGET_FRAMES,
             "identity_id": identity_id,
             "loop_mode": "loop",
@@ -383,10 +407,10 @@ def _materialize_variant(
             },
             "provenance": {
                 "air_member": audit.air_member,
-                "archive_sha256": audit.archive_sha256,
+                "archive_sha256": archive_sha256,
                 "source_action_index": source_index,
                 "source_action_number": action.action_number,
-                "source_blob_sha256": [audit.archive_sha256],
+                "source_blob_sha256": [archive_sha256],
                 "source_id": "mugen_mffa_anime",
                 "source_meaning": action.source_meaning,
                 "sff_member": audit.sff_member,
@@ -395,7 +419,7 @@ def _materialize_variant(
             "quality_tier": "exact_source_pixels_resampled",
             "sample_weight": 1.0,
             "sequence_id": sequence_id,
-            "split": _split(audit.archive_sha256),
+            "split": _split(archive_sha256),
             "target_bucket": [TARGET_SIZE, TARGET_SIZE],
             "timing": {
                 "duration_ms": [1000 / 60 * total / TARGET_FRAMES] * TARGET_FRAMES,

@@ -498,3 +498,42 @@ separation; its matched report SHA-256 is
 `3703cd17e82b9e13c9595a7bc04ec207ed6c2b4494e5bbe520f347e80f4b8964`.
 Alpha weight four and foreground weight two therefore remain the evidence-backed
 objective for this bounded experiment.
+
+## TMWA held-out semantic conditioning and flow ablation
+
+The first identity-disjoint broad experiment uses 485 training clips across 41
+identities, 28 validation clips across three disjoint identities, and an untouched
+27-clip test split across four more identities. A frozen OpenAI CLIP ViT-B/32
+text projection replaces byte-level description encoding while structured
+action/view/direction/loop fields remain factorized. This is held-out identity
+reconstruction within the indexed TMWA distribution, not open-vocabulary or
+production-quality text-to-sprite generation.
+
+At the fixed validation-selected hard-alpha thresholds, the step-4,000 semantic
+endpoint model modestly beats the byte-conditioned control on the untouched test:
+PM-RGBA MAE `0.076826` versus `0.077553`, alpha IoU `0.294173` versus
+`0.293450`, precision `0.957092` versus `0.940524`, and target-background MAE
+`0.002523` versus `0.004055`. Recall remains the principal failure at `0.299224`;
+the result is a real but small semantic improvement, not a solved generator. The
+semantic test inference report SHA-256 is
+`bb26a8e13d122e298b8bcad64668c43b1425996d10e83f7bf38ebc74ef1723f2`
+and its evaluation SHA-256 is
+`86c1fb6d87f938ee924274036bd13ec051a1148f0011af50b6d4d20b07b2ffe2`.
+
+A separate 10,000-step rectified-flow ablation removed matched endpoint
+supervision entirely and was evaluated with a 32-step Euler solve. Validation
+calibration selected alpha threshold 240. It raised alpha IoU and recall to
+`0.395538` and `0.544067`, respectively, but worsened PM-RGBA MAE to `0.103657`,
+background MAE to `0.046363`, temporal MAE to `0.094550`, and produced visibly
+speckled silhouettes. It is therefore rejected as the current quality path even
+though it improves coverage. The EMA checkpoint SHA-256 is
+`c4f43c0f925b4f72a684b1d44d6bce1e2505e25d6923512dac45ce3311c06afb`,
+the inference report SHA-256 is
+`85f94f607c52d2a123c21ba55cceee5b4b8d379249c9dfb7871ecea83e3091c2`,
+the validation calibration SHA-256 is
+`e94b1d6120c0d083a3612bf36df37cb5268d4066f9c19dc0eb9175934cedef59`,
+and the evaluation SHA-256 is
+`e55539f1cf4aa7d98c0c2ae69c1bcfae9995488c9ee5c81f70ad3ea72e412e59`.
+The next quality run should instead exploit the far larger, scale-stabilized
+MUGEN action corpus while retaining semantic conditioning and the empirically
+successful endpoint objective.

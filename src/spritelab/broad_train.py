@@ -73,6 +73,7 @@ class BroadTrainingConfig:
     foreground_weight: float = 2.0
     alpha_channel_weight: float = 4.0
     endpoint_weight: float = 1.0
+    horizontal_flip_probability: float = 0.0
     ema_decay: float = 0.999
     gradient_clip_norm: float = 1.0
     steps: int = 10_000
@@ -122,6 +123,11 @@ class BroadTrainingConfig:
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
+        if (
+            not math.isfinite(self.horizontal_flip_probability)
+            or not 0 <= self.horizontal_flip_probability <= 1
+        ):
+            raise ValueError("horizontal_flip_probability must be in [0, 1]")
         if self.minimum_learning_rate > self.learning_rate:
             raise ValueError("minimum_learning_rate cannot exceed learning_rate")
         if not math.isfinite(self.ema_decay) or not 0 <= self.ema_decay < 1:
@@ -529,6 +535,18 @@ def _train(
                 generator=sampler_generator,
             )
             clean, phases = _tensor_batch(runtime, corpus.train, indices, device=device)
+            if config.horizontal_flip_probability > 0:
+                flip_mask = (
+                    runtime.rand((clean.shape[0],), generator=sampler_generator, device="cpu")
+                    < config.horizontal_flip_probability
+                )
+                if bool(flip_mask.any()):
+                    flip_mask = flip_mask.to(device=device)
+                    clean = runtime.where(
+                        flip_mask[:, None, None, None, None],
+                        clean.flip(dims=(-1,)),
+                        clean,
+                    )
             encoded = _slice_encoded(train_encoded, indices)
             semantic = _semantic_tensor(runtime, train_semantic, indices, device=device)
             context, context_mask = _encode_context(encoder, encoded, semantic)

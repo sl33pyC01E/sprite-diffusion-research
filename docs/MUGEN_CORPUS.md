@@ -13,8 +13,9 @@ Character packs are untrusted data. SpriteLab will never launch M.U.G.E.N or
 IKEMEN, execute a character, import native code, or interpret CMD/CNS logic during
 acquisition. ZIP paths are validated with the shared hardened archive inspector.
 Executable members are quarantined. CMD/CNS files may be retained as hashed
-evidence but are not executed or used as training data. RAR and 7z packs remain
-metadata-only until an equivalently hardened extractor exists.
+evidence but are not executed or used as training data. RAR and 7z inputs are
+listed with libarchive, path-validated, and only exact DEF/AIR/SFF/ACT members
+are streamed to memory. No archive paths are unpacked to disk.
 
 The initial adapter in `spritelab.adapters.mugen` parses only:
 
@@ -126,3 +127,55 @@ This tiny 22-MB validation collection already contributes more than fifteen
 thousand usable action frames. It substantiates the hypothesis that large
 anime/JUS rosters could change corpus scale materially, while also quantifying
 why strict per-action validation is necessary.
+
+## MFFA anime collection-scale audit
+
+The MUGEN & IKEMEN Community anime/manga category was indexed as 270 resource
+pages and 298 downloadable archive occurrences. The immutable discovery index is
+`data/index/reports/mugen-mffa-anime-discovery-v2.json`, SHA-256
+`1d985ef837f94cd93344bce2fe5ccd772664fb983c50e84c36001b76e0d27280`.
+All 139 ZIPs and 159 RAR/7z archives were acquired through append-only,
+power-loss-resumable CAS fetchers with the 100-GiB free-space floor enforced.
+The ZIP acquisition index SHA-256 is
+`9551af668e4d96464690cb352e025d0abc6f1d8aaca0c04c2f8cbbe925eda91e`;
+the RAR/7z index SHA-256 is
+`5fcce574461846102d6457c413eeb4b09294ecfa62284a2c517d8b3f6a4bb493`.
+Together they bind 8,480,344,538 archive bytes.
+
+The corrected ZIP audit is
+`data/index/reports/mugen-mffa-anime-zip-corpus-audit-v3.json`, SHA-256
+`b4cd7a5caab27c79d34d4223b6e42867a445f4c57f54b5ae145fc712a7cf9701`.
+It decodes 93 packs (79 SFFv1 and 14 SFFv2), with 46 explicit failures retained.
+It finds 112,945 sprite occurrences, 104,056 pack-local distinct RGBA payloads,
+26,223 admitted actions, and 187,452 ordered materialized frame occurrences.
+Known labels comprise 9,194 attack, 798 block, 177 death, 329 emote, 625 hurt,
+617 idle, 476 jump, 88 run, 415 spawn, and 179 walk actions; 13,325 custom
+actions remain unknown. Runtime timing evidence is 17,342 full loops, 2,599
+intro-then-loop actions, and 6,282 terminal holds.
+
+The independent RAR/7z audit is
+`data/index/reports/mugen-mffa-anime-rar7z-corpus-audit-v1.json`, SHA-256
+`9433bc9a4d326b14dd8ade3780ce269c9199e01ccbecdaeaa2bf3e4be5762b41`.
+It decodes 120 packs (100 SFFv1 and 20 SFFv2), with 39 failures retained. It
+finds 134,526 sprite occurrences, 120,056 pack-local distinct RGBA payloads,
+30,883 admitted actions, and 214,484 ordered frame occurrences. Its known
+labels comprise 10,180 attack, 1,053 block, 233 death, 341 emote, 794 hurt,
+799 idle, 634 jump, 112 run, 449 spawn, and 234 walk actions; 16,054 custom
+actions remain unknown. Runtime timing evidence is 22,109 full loops, 2,929
+intro-then-loop actions, and 5,845 terminal holds.
+
+Combined, this tranche verifies 247,471 decoded sprite occurrences, 57,106
+admitted animations, and 401,936 ordered materialized frame occurrences. These
+are source-corpus facts, not generated samples. The training materializer keeps
+known finite loops with at least two positive-duration and two pixel-distinct
+frames, caps each action class per identity, removes same-action tensor
+duplicates, and selects eight duration-weighted frames. A single neutral-motion
+reference extent fixes scale for every action of an identity; the MUGEN world
+origin is placed at a stable bottom-center anchor with exact floor-index nearest
+sampling into 128x128 RGBA. This avoids action-dependent zoom and preserves
+character scale across idle, locomotion, hurt, and attack controls.
+
+Rights remain unknown or unverified for these fan uploads. Landing-page uploader
+claims, internal DEF author/name fields, archive identity, media members, and
+source action numbers remain separate provenance facts. No permissive rights are
+inferred, and no MUGEN character code is executed.
