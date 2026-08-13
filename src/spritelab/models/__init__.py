@@ -47,6 +47,14 @@ from .pixeldit import (
     torch_available,
     validate_model_input_shapes,
 )
+from .sprite_autoencoder import (
+    MissingSpriteAutoencoderTorchError,
+    SpriteAutoencoderConfig,
+    SpriteReconstructionLoss,
+    SpriteReconstructionLossConfig,
+    SpriteRGBAAutoencoder,
+    sprite_reconstruction_loss,
+)
 
 __all__ = [
     "BOS_TOKEN_ID",
@@ -67,12 +75,17 @@ __all__ = [
     "MissingConditioningTorchError",
     "MissingFlowTorchError",
     "MissingTorchError",
+    "MissingSpriteAutoencoderTorchError",
     "PatchGrid",
     "PAD_TOKEN_ID",
     "PixelDiTConfig",
     "RectifiedFlowBatch",
     "SpriteClipCondition",
     "SpriteConditionEncoder",
+    "SpriteAutoencoderConfig",
+    "SpriteReconstructionLoss",
+    "SpriteReconstructionLossConfig",
+    "SpriteRGBAAutoencoder",
     "STRUCTURED_TOKEN_COUNT",
     "endpoint_sample_velocity_model",
     "euler_sample_velocity_model",
@@ -82,6 +95,7 @@ __all__ = [
     "rectified_flow_mse",
     "require_torch",
     "sample_rectified_flow_batch",
+    "sprite_reconstruction_loss",
     "torch_available",
     "validate_conditioning_shape",
     "validate_identity_action_groups",
