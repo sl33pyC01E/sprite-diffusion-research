@@ -227,27 +227,44 @@ def _caption_reference(
             handle.flush()
             os.fsync(handle.fileno())
     data_url = "data:image/png;base64," + base64.b64encode(input_payload).decode("ascii")
-    request = openai_vision_request(model=SERVED_MODEL, png_data_url=data_url)
-    request_payload = canonical_json_bytes(request)
-    response_payload = _post_json(
-        endpoint,
-        request_payload,
-        timeout=timeout,
-        attempts=3,
-    )
-    response = _json_object(response_payload, "caption service response")
-    content = _response_content(response)
-    try:
-        structured = parse_structured_caption(content)
-    except ValueError as error:
+    response = None
+    response_payload = None
+    request_payload = None
+    structured = None
+    last_error: Exception | None = None
+    for max_tokens in (2048, 4096):
+        request = openai_vision_request(
+            model=SERVED_MODEL,
+            png_data_url=data_url,
+            max_tokens=max_tokens,
+        )
+        request_payload = canonical_json_bytes(request)
+        response_payload = _post_json(
+            endpoint,
+            request_payload,
+            timeout=timeout,
+            attempts=3,
+        )
+        response = _json_object(response_payload, "caption service response")
+        try:
+            content = _response_content(response)
+            structured = parse_structured_caption(content)
+        except (RuntimeError, ValueError) as error:
+            last_error = error
+            continue
+        break
+    if structured is None:
+        assert response is not None and response_payload is not None and request_payload is not None
+        assert last_error is not None
         failure_record = {
-            "error": str(error),
+            "error": str(last_error),
             "identity_id": reference.identity_id,
             "model_response": response,
             "model_response_file_sha256": hashlib.sha256(response_payload).hexdigest(),
             "request_body_sha256": hashlib.sha256(request_payload).hexdigest(),
         }
-        raise CaptionValidationFailure(str(error), failure_record) from error
+        raise CaptionValidationFailure(str(last_error), failure_record) from last_error
+    assert response is not None and response_payload is not None and request_payload is not None
     return {
         "alpha_bbox_xywh": list(reference.alpha_bbox_xywh)
         if reference.alpha_bbox_xywh is not None
