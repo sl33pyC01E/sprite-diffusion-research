@@ -96,11 +96,14 @@ def export_clip_text_token_cache(
     hidden_width = int(model.config.hidden_size)
     if hidden_width != 768:
         raise TextTokenCacheError(f"unexpected CLIP hidden width: {hidden_width}")
-    embeddings = np.empty((len(prompts), maximum_tokens, hidden_width), dtype=np.float16)
-    input_ids = np.empty((len(prompts), maximum_tokens), dtype=np.int32)
-    attention_mask = np.empty((len(prompts), maximum_tokens), dtype=np.bool_)
-    for start in range(0, len(prompts), batch_size):
-        batch = prompts[start : start + batch_size]
+    encoded_prompts = ("", *prompts)
+    encoded_embeddings = np.empty(
+        (len(encoded_prompts), maximum_tokens, hidden_width), dtype=np.float16
+    )
+    encoded_input_ids = np.empty((len(encoded_prompts), maximum_tokens), dtype=np.int32)
+    encoded_attention_mask = np.empty((len(encoded_prompts), maximum_tokens), dtype=np.bool_)
+    for start in range(0, len(encoded_prompts), batch_size):
+        batch = encoded_prompts[start : start + batch_size]
         tokens = tokenizer(
             list(batch),
             padding="max_length",
@@ -114,9 +117,15 @@ def export_clip_text_token_cache(
                 attention_mask=tokens.attention_mask.to(device),
             ).last_hidden_state
         end = start + len(batch)
-        embeddings[start:end] = hidden.float().cpu().numpy().astype(np.float16)
-        input_ids[start:end] = tokens.input_ids.numpy().astype(np.int32)
-        attention_mask[start:end] = tokens.attention_mask.numpy().astype(np.bool_)
+        encoded_embeddings[start:end] = hidden.float().cpu().numpy().astype(np.float16)
+        encoded_input_ids[start:end] = tokens.input_ids.numpy().astype(np.int32)
+        encoded_attention_mask[start:end] = tokens.attention_mask.numpy().astype(np.bool_)
+    embeddings = np.ascontiguousarray(encoded_embeddings[1:])
+    input_ids = np.ascontiguousarray(encoded_input_ids[1:])
+    attention_mask = np.ascontiguousarray(encoded_attention_mask[1:])
+    unconditional_embeddings = np.ascontiguousarray(encoded_embeddings[0])
+    unconditional_input_ids = np.ascontiguousarray(encoded_input_ids[0])
+    unconditional_attention_mask = np.ascontiguousarray(encoded_attention_mask[0])
     validate_text_token_arrays(embeddings, input_ids, attention_mask, row_count=len(prompts))
     guard = disk_guard or DiskGuard(output.parent, min_free_bytes=100 * 1024**3)
     guard.require_capacity(
@@ -131,6 +140,9 @@ def export_clip_text_token_cache(
         "attention_mask": attention_mask,
         "embeddings": embeddings,
         "input_ids": input_ids,
+        "unconditional_attention_mask": unconditional_attention_mask,
+        "unconditional_embeddings": unconditional_embeddings,
+        "unconditional_input_ids": unconditional_input_ids,
     }
     array_records = {}
     for name, value in arrays.items():
@@ -158,6 +170,15 @@ def export_clip_text_token_cache(
     manifest = {
         "arrays": array_records,
         "artifact_kind": "frozen_clip_token_hidden_state_cache",
+        "classifier_free_unconditional": {
+            "array_names": {
+                "attention_mask": "unconditional_attention_mask",
+                "embeddings": "unconditional_embeddings",
+                "input_ids": "unconditional_input_ids",
+            },
+            "prompt": "",
+            "prompt_utf8_sha256": hashlib.sha256(b"").hexdigest(),
+        },
         "encoder": {
             "library": "transformers",
             "library_version": transformers.__version__,
