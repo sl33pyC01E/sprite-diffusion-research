@@ -28,6 +28,7 @@ def main() -> None:
         "--sampler-algorithm", choices=("endpoint", "euler", "heun"), default="endpoint"
     )
     parser.add_argument("--sample-steps", type=int, default=1)
+    parser.add_argument("--max-batch-size", type=int, default=16)
     args = parser.parse_args()
     seed = (
         args.seed
@@ -52,6 +53,7 @@ def main() -> None:
             noise_strategy="independent",
             device="cuda",
             deterministic_algorithms=True,
+            max_batch_size=args.max_batch_size,
         ),
         disk_guard=DiskGuard(ROOT, min_free_bytes=100 * 1024**3),
     )

@@ -242,6 +242,39 @@ def test_endpoint_sampler_matches_one_step_euler_and_is_reported(tmp_path: Path)
     assert report["sampler"]["algorithm"] == "direct_t1_endpoint_velocity"
 
 
+def test_chunked_inference_preserves_noise_and_samples(tmp_path: Path) -> None:
+    checkpoint, checkpoint_sha, _, _ = _checkpoint_bundle(tmp_path)
+    common = {
+        "checkpoint_path": checkpoint,
+        "requests": _requests(),
+        "frame_phases": ((0.0, 0.5), (0.0, 0.5)),
+        "expected_checkpoint_sha256": checkpoint_sha,
+    }
+    unchunked = run_checkpoint_inference(
+        **common,
+        output_directory=tmp_path / "unchunked",
+        config=CheckpointInferenceConfig(seed=45, sample_steps=1),
+    )
+    chunked = run_checkpoint_inference(
+        **common,
+        output_directory=tmp_path / "chunked",
+        config=CheckpointInferenceConfig(seed=45, sample_steps=1, max_batch_size=1),
+    )
+
+    assert chunked.noise_sha256 == unchunked.noise_sha256
+    assert all(
+        np.array_equal(np.load(left, allow_pickle=False), np.load(right, allow_pickle=False))
+        for left, right in zip(chunked.sample_paths, unchunked.sample_paths, strict=True)
+    )
+    chunked_report = json.loads(chunked.report_path.read_text(encoding="utf-8"))
+    assert chunked_report["sampler"]["model_batch_size"] == 1
+
+
+def test_inference_batch_size_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="max_batch_size"):
+        CheckpointInferenceConfig(seed=1, max_batch_size=0)
+
+
 def test_endpoint_sampler_requires_one_step() -> None:
     with pytest.raises(ValueError, match="requires sample_steps=1"):
         CheckpointInferenceConfig(

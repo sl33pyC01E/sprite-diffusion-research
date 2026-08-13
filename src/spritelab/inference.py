@@ -66,6 +66,7 @@ class CheckpointInferenceConfig:
     noise_strategy: NoiseStrategy = "independent"
     device: str = "cpu"
     deterministic_algorithms: bool = True
+    max_batch_size: int | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
@@ -87,6 +88,8 @@ class CheckpointInferenceConfig:
             raise ValueError("device must be a non-empty string")
         if not isinstance(self.deterministic_algorithms, bool):
             raise TypeError("deterministic_algorithms must be a bool")
+        if self.max_batch_size is not None:
+            _positive_integer("max_batch_size", self.max_batch_size)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,23 +248,29 @@ def run_checkpoint_inference(
                 context, context_mask = condition_encoder(encoded)
             else:
                 context, context_mask = condition_encoder(encoded, semantic_vectors)
-            if inference.sampler_algorithm == "endpoint":
-                sampled = endpoint_sample_velocity_model(
-                    denoiser,
-                    noise,
-                    conditioning=context,
-                    conditioning_mask=context_mask,
-                    frame_phase=phases,
-                )
-            else:
-                sampled = euler_sample_velocity_model(
-                    denoiser,
-                    noise,
-                    steps=inference.sample_steps,
-                    conditioning=context,
-                    conditioning_mask=context_mask,
-                    frame_phase=phases,
-                )
+            batch_size = inference.max_batch_size or len(request_rows)
+            sampled_batches = []
+            for start in range(0, len(request_rows), batch_size):
+                stop = min(start + batch_size, len(request_rows))
+                if inference.sampler_algorithm == "endpoint":
+                    sampled_batch = endpoint_sample_velocity_model(
+                        denoiser,
+                        noise[start:stop],
+                        conditioning=context[start:stop],
+                        conditioning_mask=context_mask[start:stop],
+                        frame_phase=phases[start:stop],
+                    )
+                else:
+                    sampled_batch = euler_sample_velocity_model(
+                        denoiser,
+                        noise[start:stop],
+                        steps=inference.sample_steps,
+                        conditioning=context[start:stop],
+                        conditioning_mask=context_mask[start:stop],
+                        frame_phase=phases[start:stop],
+                    )
+                sampled_batches.append(sampled_batch)
+            sampled = runtime.cat(sampled_batches, dim=0)
     finally:
         runtime.use_deterministic_algorithms(previous_deterministic)
 
@@ -367,6 +376,7 @@ def run_checkpoint_inference(
             ),
             "path_direction": "t=1_noise_to_t=0_data",
             "sample_steps": inference.sample_steps,
+            "model_batch_size": inference.max_batch_size or len(request_rows),
         },
         "rng": {
             "generator": "torch.Generator",
