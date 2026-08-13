@@ -52,7 +52,13 @@ test("publishes the curated evidence payload and representative animations", asy
   );
   assert.match(snapshot.tmwa_causal16_step_2000.claim, /in-sample memorization/i);
   assert.equal(snapshot.tmwa_causal16_step_2000.idle_to_walk_moves_toward_replacement, 6);
-  assert.equal(galleryManifest.files.length, 16);
+  assert.equal(snapshot.tmwa_causal16_alpha4_step_6000.walk_correct_target_preference, 8);
+  assert.equal(snapshot.tmwa_causal16_alpha4_step_6000.alpha_iou_at_127, 0.979635);
+  assert.equal(galleryManifest.files.length, 21);
+  assert.equal(
+    galleryManifest.runs.tmwa_causal16_alpha4_step_6000.decode_bundle_sha256,
+    "25c78b85b6dc9f6c463e081c5504203881d134842c3bc7427e2d0c2612a22aa0",
+  );
   assert.match(galleryManifest.claim_scope, /not held-out/i);
 
   for (const file of galleryManifest.files) {
@@ -65,5 +71,6 @@ test("publishes the curated evidence payload and representative animations", asy
     access(new URL("../public/gallery/sasquatch-walk-target.png", import.meta.url)),
     access(new URL("../public/gallery/sasquatch-walk-endpoint.png", import.meta.url)),
     access(new URL("../public/gallery/fetid-rat-idle.png", import.meta.url)),
+    access(new URL("../public/gallery/skull-ice-walk-alpha4-6000.png", import.meta.url)),
   ]);
 });

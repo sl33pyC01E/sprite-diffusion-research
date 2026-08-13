@@ -164,7 +164,7 @@ function GalleryView() {
 }
 
 function ExperimentsView() {
-  const [step, setStep] = useState<1000 | 2000>(2000);
+  const [step, setStep] = useState<(typeof experimentSteps)[number]["step"]>(6000);
   const current = experimentSteps.find((item) => item.step === step)!;
   const before = experimentSteps[0];
   return (
@@ -173,14 +173,14 @@ function ExperimentsView() {
       <div className="experiment-layout">
         <div className="experiment-main panel">
           <div className="panel-top"><div><span>TMWA CAUSAL16</span><h2>Continuation curve</h2></div><div className="step-switch">{experimentSteps.map((item) => <button type="button" key={item.step} className={step === item.step ? "active" : ""} onClick={() => setStep(item.step)}>{item.step.toLocaleString()} steps</button>)}</div></div>
-          <div className="big-score"><span>PM-RGBA error</span><strong>{current.pmMae.toFixed(5)}</strong><small>{step === 2000 ? "↓ 19.7% from step 1,000" : "baseline matched evaluation"}</small></div>
+          <div className="big-score"><span>PM-RGBA error</span><strong>{current.pmMae.toFixed(5)}</strong><small>{step >= 3000 ? "alpha-channel weight 4 · endpoint sampler" : "alpha-weight-one baseline"}</small></div>
           <div className="bar-chart" aria-label="Premultiplied RGBA error by training step">{experimentSteps.map((item) => <div className="bar-column" key={item.step}><div className="bar-track"><div className={item.step === step ? "bar-fill active" : "bar-fill"} style={{ height: `${(item.pmMae / 0.06) * 100}%` }}><span>{item.pmMae.toFixed(4)}</span></div></div><b>{item.step / 1000}k</b></div>)}</div>
-          <div className="experiment-metrics"><Metric label="Alpha IoU @127" value={(current.alphaIou * 100).toFixed(1) + "%"} detail={step === 2000 ? "+6.9 points" : "matched target"} accent /><Metric label="Action separation" value={current.separation.toFixed(1) + "%"} detail="of target pair distance" /><Metric label="Walk preference" value={`${current.walkCorrect} / 8`} detail="generated walk nearer walk" /><Metric label="Endpoint loss" value={current.endpointLoss.toFixed(4)} detail="fixed diagnostic" /></div>
+          <div className="experiment-metrics"><Metric label="Alpha IoU @127" value={(current.alphaIou * 100).toFixed(1) + "%"} detail="matched target silhouette" accent /><Metric label="Action separation" value={current.separation.toFixed(1) + "%"} detail="of target pair distance" /><Metric label="Walk preference" value={`${current.walkCorrect} / 8`} detail="generated walk nearer walk" /><Metric label="Endpoint loss" value={current.endpointLoss.toFixed(4)} detail="fixed diagnostic" /></div>
         </div>
         <aside className="experiment-side">
-          <div className="panel gate-panel"><div className="panel-top"><div><span>PREDECLARED</span><h2>2k causal gates</h2></div><Badge tone="green">4 / 4 PASS</Badge></div><div className="gate-list">{causalGates.map((gate) => <div className="gate-row" key={gate.label}><span className="gate-check">✓</span><div><strong>{gate.label}</strong><small>{gate.observed} <i>{gate.threshold}</i></small></div></div>)}</div></div>
+          <div className="panel gate-panel"><div className="panel-top"><div><span>QUALITY PEAK</span><h2>5k → 6k decision</h2></div><Badge tone="amber">MIXED</Badge></div><div className="gate-list">{causalGates.map((gate) => <div className="gate-row" key={gate.label}><span className="gate-check">{gate.pass ? "✓" : "~"}</span><div><strong>{gate.label}</strong><small>{gate.observed} <i>{gate.threshold}</i></small></div></div>)}</div></div>
           <div className="panel claim-panel"><span className="claim-icon">!</span><div><h3>Evidence boundary</h3><p>All 16 requests, identities, actions, and targets occurred in training. Better causal response is real; generalization is untested.</p></div></div>
-          <div className="panel mini-compare"><span>1k → 2k</span><div><b>{before.idleToWalk}/8</b><i>idle → walk</i><em>→</em><b>{current.idleToWalk}/8</b></div><small>movement toward replacement target</small></div>
+          <div className="panel mini-compare"><span>2k baseline → selected</span><div><b>{before.idleToWalk}/8</b><i>idle → walk</i><em>→</em><b>{current.idleToWalk}/8</b></div><small>movement toward replacement target</small></div>
         </aside>
       </div>
     </section>

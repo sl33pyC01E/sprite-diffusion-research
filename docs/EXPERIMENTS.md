@@ -433,3 +433,68 @@ one walk generation preferring its walk target. Loss reduction alone is not a
 continuation gate. If steering remains idle-biased, keep the continuation as
 evidence and test a separate from-scratch endpoint-weight ablation rather than
 mutating the continuation configuration.
+
+## TMWA alpha-weight quality sweep and selected checkpoint
+
+The exact sixteen-clip TMWA causal subset was used for a controlled quality
+sweep. All compared runs retain the same ordered inputs, eight 64 x 64 RGBA
+frames, architecture, seed, optimizer, learning rate, foreground weight two,
+matched-endpoint weight one, and shared inference noise SHA-256
+`d1851b428b3f39de2665f5a9900dc387f0419a33e350ed4d6ea2b7d0f8c30fa7`.
+The successful ablation changes only the alpha-channel residual multiplier from
+one to four. All results are exact in-sample reconstruction and action-token
+sensitivity measurements, not held-out or open-vocabulary generation.
+
+At 3,000 steps, alpha weight four decisively beat the alpha-weight-one control.
+Endpoint premultiplied-RGBA MAE fell from `0.042123` to `0.030303`, target
+background MAE from `0.033598` to `0.014410`, temporal-delta MAE from `0.026199`
+to `0.020968`, and alpha IoU at 127 rose from `0.882087` to `0.929190`. Mean
+generated-to-target idle/walk separation rose from `0.764567` to `0.825175`, and
+both actions preferred their correct target in seven of eight identity pairs.
+The alpha-four checkpoint/report SHA-256 values are respectively
+`804e4077e0e8d6a20237cd078b97b8069058fd7635390c8d0764ec9eea847826` and
+`1c471220c2b47cdbd821d8921520db97722abe808f07f02a50f07a499fe035c5`;
+the matched evaluation is
+`7e69c119370a9e32ad82c75fec72ec88a730a24d0051ec86d322e4d1348e7ccd`.
+
+Immutable 1,000-step continuations were evaluated at 4,000, 5,000, and 6,000
+cumulative steps. Endpoint results were:
+
+| Step | PM-RGBA MAE | Foreground MAE | Background MAE | Alpha IoU @127 | Temporal MAE | Action separation | Both correct |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3,000 | 0.030303 | 0.088261 | 0.014410 | 0.929190 | 0.020968 | 0.825175 | 7/8 |
+| 4,000 | 0.025557 | 0.075670 | 0.011045 | 0.949561 | 0.017328 | 0.934535 | 7/8 |
+| 5,000 | 0.022242 | 0.068638 | 0.009056 | 0.970442 | 0.017293 | 1.0134 | 7/8 |
+| 6,000 | 0.024113 | 0.062863 | 0.012851 | 0.979635 | 0.016642 | 1.1021 | 8/8 |
+
+Step 6,000 is selected for strongest subject reconstruction, animation, silhouette,
+and symmetric action response: all eight idle-to-walk swaps move toward the walk
+target and all eight walk outputs prefer the walk target. Step 5,000 remains the
+cleaner global/background-error alternative and is not superseded or deleted.
+The selected checkpoint SHA-256 is
+`394880c5e067059f01b1f9c2462e75bae66705944e11f04c0a5b058e9689b761`,
+report SHA-256 is
+`7fef539de909b6612de95c40168c98de02f25f93078433adcd6ec529f26e01de`,
+and matched evaluation SHA-256 is
+`a1e151788c00f977d5b167e1e39a71bb02682ac8234cbd235c6a496afb5504cd`.
+
+Display calibration is explicitly an optimistic training-target estimate.
+Step 6,000 selects hard-alpha threshold 144 and a generated-only, clip-global
+64-color palette. The calibrated decode has PM-RGBA MAE `0.020253`, alpha IoU
+`0.911034`, and temporal-delta MAE `0.011305`. Its no-clobber bundle index SHA-256
+is `25c78b85b6dc9f6c463e081c5504203881d134842c3bc7427e2d0c2612a22aa0`.
+Visual inspection still finds occasional isolated high-confidence background
+pixels; they are retained as model errors rather than removed by an uncalibrated
+connected-component heuristic.
+
+Two additional 3,000-step ablations were rejected. Foreground weight four improved
+foreground MAE only slightly (`0.083632` versus `0.088261`) while worsening global
+MAE, background MAE, IoU, temporal error, and action separation; its matched report
+SHA-256 is
+`afe7b5f353184126660245bcbfd13a6fd7e526fff0c8f06c72012028f9a15e63`.
+Alpha weight eight also worsened global (`0.033606`), foreground (`0.088758`),
+background (`0.017874`), and temporal (`0.024233`) errors without improving action
+separation; its matched report SHA-256 is
+`3703cd17e82b9e13c9595a7bc04ec207ed6c2b4494e5bbe520f347e80f4b8964`.
+Alpha weight four and foreground weight two therefore remain the evidence-backed
+objective for this bounded experiment.

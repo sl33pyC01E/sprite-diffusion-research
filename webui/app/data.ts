@@ -33,7 +33,7 @@ export type GalleryRecord = {
 };
 
 export const indexSnapshot = {
-  exportedAt: "2026-08-12",
+  exportedAt: "2026-08-13",
   bundleSha256:
     "64b8f0210583cbd5d994114a0490afa55d7821e115e12df19fdeceaee6e2a8e6",
   databaseSha256:
@@ -237,6 +237,42 @@ export const entityCoverage = [
 
 export const gallery: GalleryRecord[] = [
   {
+    id: "skull-ice-walk-alpha4-6000",
+    identity: "Ice skull",
+    entity: "monster",
+    action: "walk",
+    direction: "down",
+    run: "TMWA alpha-4 · 6,000 steps · palette64",
+    target: "/gallery/skull-ice-walk-target.png",
+    endpoint: "/gallery/skull-ice-walk-alpha4-6000.png",
+    label: "Selected quality / steering checkpoint",
+    caveat: "Exact in-sample replay; hard-alpha 144 and generated-only 64-color display decode.",
+  },
+  {
+    id: "skull-ice-idle-alpha4-6000",
+    identity: "Ice skull",
+    entity: "monster",
+    action: "idle",
+    direction: "down",
+    run: "TMWA alpha-4 · 6,000 steps · palette64",
+    target: "/gallery/skull-ice-idle-target.png",
+    endpoint: "/gallery/skull-ice-idle-alpha4-6000.png",
+    label: "Same identity, alternate action",
+    caveat: "Matched noise and non-action conditions isolate the idle/walk action token.",
+  },
+  {
+    id: "logmonster-walk-alpha4-6000",
+    identity: "Logmonster",
+    entity: "monster",
+    action: "walk",
+    direction: "down",
+    run: "TMWA alpha-4 · 6,000 steps · palette64",
+    target: "/gallery/logmonster-walk-target.png",
+    endpoint: "/gallery/logmonster-walk-alpha4-6000.png",
+    label: "Large-silhouette quality sample",
+    caveat: "In-sample reconstruction only; occasional isolated background pixels remain visible.",
+  },
+  {
     id: "sasquatch-walk",
     identity: "Sasquatch",
     entity: "monster",
@@ -346,16 +382,6 @@ export const gallery: GalleryRecord[] = [
 
 export const experimentSteps = [
   {
-    step: 1000,
-    pmMae: 0.051985,
-    alphaIou: 0.795,
-    separation: 37.52,
-    idleToWalk: 0,
-    walkCorrect: 1,
-    endpointLoss: 0.115317,
-    report: "147acc50a41b9bbffd905d0636520aeaebfc73a45755982a64d235dc5ac9fdbf",
-  },
-  {
     step: 2000,
     pmMae: 0.041747,
     alphaIou: 0.863808,
@@ -365,13 +391,53 @@ export const experimentSteps = [
     endpointLoss: 0.082645,
     report: "80dab913e390e8bed42241f383b8b327d8053575a76f746a07b34dc2ebca4fa0",
   },
+  {
+    step: 3000,
+    pmMae: 0.030303,
+    alphaIou: 0.92919,
+    separation: 82.52,
+    idleToWalk: 7,
+    walkCorrect: 7,
+    endpointLoss: 0.100295,
+    report: "1c471220c2b47cdbd821d8921520db97722abe808f07f02a50f07a499fe035c5",
+  },
+  {
+    step: 4000,
+    pmMae: 0.025557,
+    alphaIou: 0.949561,
+    separation: 93.45,
+    idleToWalk: 7,
+    walkCorrect: 7,
+    endpointLoss: 0.073079,
+    report: "5365f324cf49ff1db0d421ce2145b0820d964a262f4b3f21f4874d35ea36e8ea",
+  },
+  {
+    step: 5000,
+    pmMae: 0.022242,
+    alphaIou: 0.970442,
+    separation: 101.34,
+    idleToWalk: 8,
+    walkCorrect: 7,
+    endpointLoss: 0.05473,
+    report: "3635c59396ff4f6e44f0e7623bdfa84e75213bdf56034e4a1a90c098897307d7",
+  },
+  {
+    step: 6000,
+    pmMae: 0.024113,
+    alphaIou: 0.979635,
+    separation: 110.21,
+    idleToWalk: 8,
+    walkCorrect: 8,
+    endpointLoss: 0.041985,
+    report: "7fef539de909b6612de95c40168c98de02f25f93078433adcd6ec529f26e01de",
+  },
 ] as const;
 
 export const causalGates = [
-  { label: "PM-RGBA error", observed: "0.04175", threshold: "< 0.05199", pass: true },
-  { label: "Action separation", observed: "61.79%", threshold: "> 37.52%", pass: true },
-  { label: "Idle → walk movement", observed: "6 / 8", threshold: "> 0 / 8", pass: true },
-  { label: "Walk target preference", observed: "4 / 8", threshold: "> 1 / 8", pass: true },
+  { label: "Foreground error", observed: "0.06286", threshold: "< 0.06864 at 5k", pass: true },
+  { label: "Alpha IoU @127", observed: "97.96%", threshold: "> 97.04% at 5k", pass: true },
+  { label: "Action separation", observed: "110.21%", threshold: "> 101.34% at 5k", pass: true },
+  { label: "Global PM-RGBA", observed: "0.02411", threshold: "5k was 0.02224", pass: false },
 ] as const;
 
 export const pipelineStages = [
@@ -444,8 +510,8 @@ export const pipelineStages = [
 export const evidenceHashes = [
   ["Provenance bundle", "64b8f0210583cbd5d994114a0490afa55d7821e115e12df19fdeceaee6e2a8e6"],
   ["Live index checkpoint", "6f3802aaed83cdc1ee4e3a8a3588328433f11b8c5b708c2aa1bb7c6a6a1dca87"],
-  ["TMWA 2k checkpoint", "5b944cb24ded9a046a2e3d7af7a8d2264eb673added068f5f6218039d19cf8c8"],
-  ["TMWA 2k matched eval", "2491272f1abf91784c4f2d4b3e066bf381f7bfe2ad9b4099f364e10600c4c15c"],
-  ["TMWA 2k causal audit", "36679a485fd68673852f3866445fed7e3c1333c2e84d17b3ae1fe94e011dde66"],
-  ["Preview index", "675660ca488f45d81f843efe2b490c8a10e577be39cb4244370ce531bc22b176"],
+  ["TMWA alpha-4 6k checkpoint", "394880c5e067059f01b1f9c2462e75bae66705944e11f04c0a5b058e9689b761"],
+  ["TMWA alpha-4 6k matched eval", "a1e151788c00f977d5b167e1e39a71bb02682ac8234cbd235c6a496afb5504cd"],
+  ["TMWA alpha-4 decode bundle", "25c78b85b6dc9f6c463e081c5504203881d134842c3bc7427e2d0c2612a22aa0"],
+  ["TMWA alpha-4 5k matched eval", "3fd894d77e6bb24a20c14f5060f3f9e913eb935a9c616471202c252fe5716cf7"],
 ] as const;

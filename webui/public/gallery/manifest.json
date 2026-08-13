@@ -1,9 +1,18 @@
 {
   "artifact_kind": "spritelab_web_gallery_manifest",
   "schema_version": 1,
-  "published_at": "2026-08-12",
+  "published_at": "2026-08-13",
   "claim_scope": "Display derivatives from exact in-sample research requests; not held-out or open-vocabulary generation.",
   "runs": {
+    "tmwa_causal16_alpha4_step_6000": {
+      "checkpoint_sha256": "394880c5e067059f01b1f9c2462e75bae66705944e11f04c0a5b058e9689b761",
+      "inference_report_sha256": "7c454da198b50b25ebaff320a3fcf85f2e02cdf009574f5c2cbfa6da033db20d",
+      "matched_evaluation_sha256": "a1e151788c00f977d5b167e1e39a71bb02682ac8234cbd235c6a496afb5504cd",
+      "decode_bundle_sha256": "25c78b85b6dc9f6c463e081c5504203881d134842c3bc7427e2d0c2612a22aa0",
+      "native_shape": [8, 64, 64, 4],
+      "display_size": [256, 256],
+      "display_transform": "hard alpha 144; clip-global adaptive palette capped at 64 colors; no dither"
+    },
     "tmwa_causal16_step_2000": {
       "checkpoint_sha256": "5b944cb24ded9a046a2e3d7af7a8d2264eb673added068f5f6218039d19cf8c8",
       "preview_index_sha256": "675660ca488f45d81f843efe2b490c8a10e577be39cb4244370ce531bc22b176",
@@ -19,6 +28,11 @@
     }
   },
   "files": [
+    { "path": "logmonster-walk-alpha4-6000.png", "sha256": "234374351f931d163e8e11376ca59cccb1422258b05de51382ada13cd107cf55", "bytes": 33513, "run": "tmwa_causal16_alpha4_step_6000", "role": "decoded_endpoint", "identity": "Logmonster", "action": "walk" },
+    { "path": "sasquatch-walk-alpha4-6000.png", "sha256": "5c019595d9ddc7bf3ec89bf044a1390724f6f77a69885525fb30be33a6cc2b74", "bytes": 72717, "run": "tmwa_causal16_alpha4_step_6000", "role": "decoded_endpoint", "identity": "Sasquatch", "action": "walk" },
+    { "path": "skull-ice-idle-alpha4-6000.png", "sha256": "8c25a29ce9368086c1ff167ea845102c4b6749728718101f49bbdf92dc5ff2ff", "bytes": 16058, "run": "tmwa_causal16_alpha4_step_6000", "role": "decoded_endpoint", "identity": "Ice skull", "action": "idle" },
+    { "path": "skull-ice-idle-target.png", "sha256": "1e25a9017a0873bfcd4f64a5acacb0ebf728fd6eb229a27d6375228c579acc4f", "bytes": 12867, "run": "tmwa_causal16_alpha4_step_6000", "role": "target", "identity": "Ice skull", "action": "idle" },
+    { "path": "skull-ice-walk-alpha4-6000.png", "sha256": "9c33ca3d7e550c6fbbc8334e9013bafeffe1c3934d9534de1fa4eb7e6f5ec00c", "bytes": 16234, "run": "tmwa_causal16_alpha4_step_6000", "role": "decoded_endpoint", "identity": "Ice skull", "action": "walk" },
     { "path": "fetid-rat-attack.png", "sha256": "e8d18770050f1e4daf4ea900c4facc6a2e83a286ef88d1ac51a51ae2a367fe4f", "bytes": 14285, "run": "fetid_rat_step_1500_endpoint_palette32", "role": "generated", "identity": "Fetid Rat", "action": "attack" },
     { "path": "fetid-rat-death.png", "sha256": "e15dff3d41a46665455548c9e1b35022ff5bb65d3df36a7d5ab197093a50505d", "bytes": 14876, "run": "fetid_rat_step_1500_endpoint_palette32", "role": "generated", "identity": "Fetid Rat", "action": "death" },
     { "path": "fetid-rat-idle.png", "sha256": "4c80a2563acaa492ba51574e0200d3537218bb8f69c78101953e90c555f993db", "bytes": 14475, "run": "fetid_rat_step_1500_endpoint_palette32", "role": "generated", "identity": "Fetid Rat", "action": "idle" },
