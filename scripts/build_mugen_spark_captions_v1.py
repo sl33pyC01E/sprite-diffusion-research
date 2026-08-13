@@ -12,7 +12,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -95,44 +95,65 @@ def main() -> None:
     completed = _load_journal(journal_path)
     pending = [reference for reference in references if reference.identity_id not in completed]
     endpoint = args.base_url.rstrip("/") + "/chat/completions"
-    with (
-        journal_path.open("a", encoding="utf-8", newline="\n") as journal,
-        ThreadPoolExecutor(max_workers=args.workers) as executor,
-    ):
-        futures: dict[Future[dict[str, Any]], MugenStillReference] = {
-            executor.submit(
+    with journal_path.open("a", encoding="utf-8", newline="\n") as journal:
+        executor = ThreadPoolExecutor(max_workers=args.workers)
+        pending_iterator = iter(pending)
+        futures: dict[Future[dict[str, Any]], MugenStillReference] = {}
+
+        def submit_next() -> bool:
+            try:
+                reference = next(pending_iterator)
+            except StopIteration:
+                return False
+            future = executor.submit(
                 _caption_reference,
                 reference,
                 output=output,
                 input_dir=input_dir,
                 endpoint=endpoint,
                 timeout=args.request_timeout,
-            ): reference
-            for reference in pending
-        }
-        for index, future in enumerate(as_completed(futures), start=1):
-            reference = futures[future]
-            try:
-                record = future.result()
-            except CaptionValidationFailure as error:
-                _append_failure(failure_journal_path, error.failure_record)
-                raise
-            journal.write(canonical_json_bytes(record).decode("utf-8"))
-            journal.flush()
-            os.fsync(journal.fileno())
-            print(
-                json.dumps(
-                    {
-                        "captioned": len(completed) + index,
-                        "identity_id": reference.identity_id,
-                        "remaining": len(pending) - index,
-                        "training_prompt": record["training_prompt"],
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                flush=True,
             )
+            futures[future] = reference
+            return True
+
+        for _ in range(args.workers):
+            submit_next()
+        index = 0
+        try:
+            while futures:
+                done, _ = wait(futures, return_when=FIRST_COMPLETED)
+                for future in done:
+                    reference = futures.pop(future)
+                    try:
+                        record = future.result()
+                    except CaptionValidationFailure as error:
+                        _append_failure(failure_journal_path, error.failure_record)
+                        raise
+                    index += 1
+                    journal.write(canonical_json_bytes(record).decode("utf-8"))
+                    journal.flush()
+                    os.fsync(journal.fileno())
+                    print(
+                        json.dumps(
+                            {
+                                "captioned": len(completed) + index,
+                                "identity_id": reference.identity_id,
+                                "remaining": len(pending) - index,
+                                "training_prompt": record["training_prompt"],
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        flush=True,
+                    )
+                    submit_next()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
     completed = _load_journal(journal_path)
     expected_ids = [reference.identity_id for reference in references]
     if set(completed) != set(expected_ids):
