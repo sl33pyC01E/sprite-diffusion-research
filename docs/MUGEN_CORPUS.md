@@ -179,3 +179,36 @@ Rights remain unknown or unverified for these fan uploads. Landing-page uploader
 claims, internal DEF author/name fields, archive identity, media members, and
 source action numbers remain separate provenance facts. No permissive rights are
 inferred, and no MUGEN character code is executed.
+
+## Combined model-ready materialization
+
+The ZIP and RAR/7z training projections were merged without rewriting pixel
+arrays: their exact `.npy` payloads are hard-linked into
+`data/processed/mugen-mffa-anime-combined-action-v1/`. The canonical
+materialization manifest SHA-256 is
+`8d43b387765cb1289ab3491d95f26ce52c00b47b22c14ace269f71a9c84fd7bb`.
+It contains 5,906 clips at 8x128x128 RGBA: 4,408 train clips from 168
+identities, 655 validation clips from 25 identities, and 843 untouched test
+clips from 34 identities. Identity overlap between every split pair is exactly
+zero.
+
+The combined known-action counts are 3,436 attack, 778 idle, 600 spawn, 298
+walk, 246 hurt, 195 jump, 129 defend, 110 run, 91 emote, and 23 death clips.
+There are 5,856 humanoid and 50 robot clips. Raw frequency is not the training
+distribution: the training sampler chooses an identity and then one of that
+identity's available actions uniformly, preventing attack-heavy characters from
+dominating solely through authored action count.
+
+Text conditioning uses the immutable OpenAI CLIP ViT-B/32 description table at
+`data/processed/semantic-text/mugen-mffa-openai-clip-vit-b32-c7244be-v1/`.
+Its manifest SHA-256 is
+`80b37151978bfcff565547cb67e61ee04a153225ef0da3e03ef6fdfcc09f9453`
+and its canonical embedding-array SHA-256 is
+`8f14a9c1179d2cfa7541f100e8a55d319b0b18a3105bbaa218d61e3e5a14dbab`.
+All 216 distinct materialized descriptions resolve exactly. The first broad
+quality run uses an 8-layer, width-256 temporal DiT, 8 frames, CLIP text plus
+factorized action/entity/view/direction/loop conditioning, horizontal-flip
+augmentation, EMA, rectified-flow training, and matched endpoint supervision.
+Held-out evaluation remains identity-disjoint and will not be described as text
+generalization unless the untouched split and prompt controls support that
+claim.
