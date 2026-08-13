@@ -554,3 +554,10 @@ single rectified-flow pass with an explicit 25% pure-noise endpoint mixture,
 10% classifier-free text dropout, BF16 activations, FP32 parameters, EMA, and
 identity-disjoint validation.  Periodic safe-loadable checkpoints retain the
 optimizer and all sampler/flow/dropout RNG states for power-loss continuation.
+
+The matched pretrained control uses the exact pinned Stable Diffusion 1.4 UNet
+and changes only rank-16 attention LoRA adapters.  It is trained with the same
+identity/verb/sequence/frame sampler and frozen CLIP states, but against
+deterministic SD VAE RGB latents under the original 1,000-step epsilon-noise
+schedule.  Because its fixed gray alpha composite discards transparency, this
+branch is a subject/detail quality control, never the canonical RGBA output.
