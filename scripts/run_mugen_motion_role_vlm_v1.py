@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from spritelab.mugen_motion_dataset import _array_sha256  # noqa: E402
 from spritelab.mugen_motion_role import (  # noqa: E402
+    motion_role_prompt_sha256,
     motion_role_vlm_request,
     parse_motion_role_vlm_response,
 )
@@ -30,8 +31,9 @@ from spritelab.storage import DiskGuard  # noqa: E402
 
 SAMPLE = ROOT / "data/processed/mugen-mffa-motion-role-vlm-sample-v1.json"
 PLAN = ROOT / "data/processed/mugen-mffa-reference-motion-plan-v2.json"
-OUTPUT_ROOT = ROOT / "data/processed/mugen-mffa-motion-role-vlm-decisions-v1"
+OUTPUT_ROOT = ROOT / "data/processed/mugen-mffa-motion-role-vlm-decisions-v2-prompt-json"
 MODEL = "qwen3.5-122b"
+USE_RESPONSE_FORMAT = False
 
 
 def main(*, endpoint: str, workers: int, prepare_only: bool) -> None:
@@ -107,22 +109,32 @@ def main(*, endpoint: str, workers: int, prepare_only: bool) -> None:
     manifest_path = OUTPUT_ROOT / "manifest.json"
     if manifest_path.exists():
         raise FileExistsError(f"Refusing to replace role manifest: {manifest_path}")
-    accepted = sum(record["decision"]["conservative_same_subject_motion"] for record in ordered)
+    valid = [record for record in ordered if isinstance(record.get("decision"), dict)]
+    invalid = [record for record in ordered if isinstance(record.get("decision_error"), dict)]
+    if len(valid) + len(invalid) != len(ordered):
+        raise RuntimeError("role records have an unknown decision status")
+    accepted = sum(record["decision"]["conservative_same_subject_motion"] for record in valid)
     manifest = {
         "artifact_kind": "mugen_motion_role_qwen35_122b_decisions",
         "counts": {
             "conservative_same_subject_motion": accepted,
+            "invalid_model_responses": len(invalid),
             "records": len(ordered),
-            "rejected_or_ambiguous": len(ordered) - accepted,
+            "rejected_or_ambiguous": len(valid) - accepted,
+            "valid_decisions": len(valid),
         },
         "endpoint": {
             "model": MODEL,
             "service": "llama_cpp_openai_compatible_on_user_spark",
+            "structured_output_mode": "prompt_constrained_json_without_response_format",
         },
         "records": ordered,
-        "schema_version": 1,
+        "schema_version": 2,
         "source": {
             "motion_plan_file_sha256": hashlib.sha256(plan_bytes).hexdigest(),
+            "prompt_contract_sha256": motion_role_prompt_sha256(
+                use_response_format=USE_RESPONSE_FORMAT
+            ),
             "sample_file_sha256": hashlib.sha256(sample_bytes).hexdigest(),
         },
     }
@@ -186,17 +198,16 @@ def _classify(record: dict[str, Any], *, prepared: dict[str, Any], endpoint: str
         model=MODEL,
         sheet_png=prepared["sheet_png"],
         expected_verb=record["expected_verb"],
+        use_response_format=USE_RESPONSE_FORMAT,
     )
     request_payload = canonical_json_bytes(request)
     response_payload = _post(endpoint, request_payload)
     response = _object(response_payload, "VLM response")
-    decision = parse_motion_role_vlm_response(_response_content(response))
-    return {
+    result = {
         "contact_sheet": {
             "file_sha256": prepared["contact_sheet_file_sha256"],
             "relative_path": prepared["contact_sheet_relative_path"],
         },
-        "decision": decision,
         "expected_verb": record["expected_verb"],
         "identity_id": record["identity_id"],
         "model_response": response,
@@ -205,6 +216,15 @@ def _classify(record: dict[str, Any], *, prepared: dict[str, Any], endpoint: str
         "sequence_id": record["sequence_id"],
         "split": record["split"],
     }
+    try:
+        result["decision"] = parse_motion_role_vlm_response(_response_content(response))
+    except ValueError as error:
+        result["decision_error"] = {
+            "error_type": type(error).__name__,
+            "message": str(error),
+            "policy": "quarantine_without_coercion",
+        }
+    return result
 
 
 def _clip(root: Path, record: dict[str, Any]) -> np.ndarray:

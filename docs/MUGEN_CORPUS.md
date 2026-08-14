@@ -233,3 +233,33 @@ an inference gap hidden by a default. The canonical report lives at
 `data/index/reports/mugen-mffa-action-taxonomy-v1.json`; its own hash is recorded
 after generation. The later CNS/AIR join must retain source archive/member hashes,
 literal line evidence, and ambiguity instead of replacing this coarse projection.
+
+## Motion-role VLM precision audit
+
+A deterministic 77-clip sample spans 20 broad verbs with up to four clips per
+verb. Each Qwen request binds the exact reference-plus-eight-frame contact sheet,
+sequence and identity IDs, expected verb, request bytes, response bytes, and the
+Qwen 3.5 122B model alias. The first structured-decoding run is retained at
+`data/processed/mugen-mffa-motion-role-vlm-decisions-v1/manifest.json`, SHA-256
+`b96e2bd1808af6132873d3cb2af0d80b76bb635fbbc915f25ab40a2ca58c2854`, but is
+invalid as a visual-curation estimate. Llama.cpp JSON-schema-constrained decoding
+collapsed obvious same-subject sheets toward semantically incorrect enum values;
+one answer also duplicated an array enum despite `uniqueItems`. No v1 decision is
+used for admission or exclusion.
+
+The corrected prompt-constrained JSON run removes `response_format` while placing
+the same literal schema and allowed enum values in the user message. Its prompt
+contract SHA-256 is
+`27539f1f1e41706979e12927904829f51407e5a4b7d42c406e667cd8ddcf0aeb`; its
+manifest is
+`data/processed/mugen-mffa-motion-role-vlm-decisions-v2-prompt-json/manifest.json`,
+SHA-256
+`ba64bdd72f8e88ad485629970306aa2caacefd908df31b24132e5b3c4b1e856e`.
+All 77 responses parse strictly: 72 pass the conservative same-primary-subject
+motion gate and five are explicitly rejected. Most importantly, all 48 sampled
+clips from the exact 12 verbs in the canonical broad latent-motion manifest pass
+(backstep, block, crouch, dizzy, get-up, hurt, idle, jump, normal attack, run,
+turn, and walk). The five rejections occur only in broader death, special-attack,
+super-attack, and victory candidates. This bounded precision audit supports the
+current canonical verb slice; it is not a collection-wide recall estimate and
+does not replace the exact pixel gate.

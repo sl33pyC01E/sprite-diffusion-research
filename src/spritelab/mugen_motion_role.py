@@ -80,8 +80,11 @@ class MotionRoleSampleConfig:
             raise ValueError("include_pixel_statuses is invalid")
 
 
-def motion_role_prompt_sha256() -> str:
+def motion_role_prompt_sha256(*, use_response_format: bool = True) -> str:
     """Hash the exact role prompt and strict schema."""
+
+    if not isinstance(use_response_format, bool):
+        raise TypeError("use_response_format must be a boolean")
 
     return hashlib.sha256(
         canonical_json_bytes(
@@ -89,12 +92,19 @@ def motion_role_prompt_sha256() -> str:
                 "schema": MOTION_ROLE_SCHEMA,
                 "system": _SYSTEM_PROMPT,
                 "user_template": _USER_TEMPLATE,
+                "use_response_format": use_response_format,
             }
         )
     ).hexdigest()
 
 
-def motion_role_vlm_request(*, model: str, sheet_png: bytes, expected_verb: str) -> dict[str, Any]:
+def motion_role_vlm_request(
+    *,
+    model: str,
+    sheet_png: bytes,
+    expected_verb: str,
+    use_response_format: bool = True,
+) -> dict[str, Any]:
     """Build an OpenAI-compatible deterministic role-adjudication request."""
 
     if not isinstance(model, str) or not model.strip():
@@ -103,8 +113,22 @@ def motion_role_vlm_request(*, model: str, sheet_png: bytes, expected_verb: str)
         raise ValueError("sheet_png must be PNG bytes")
     if not isinstance(expected_verb, str) or not expected_verb.strip():
         raise ValueError("expected_verb must be non-empty text")
+    if not isinstance(use_response_format, bool):
+        raise TypeError("use_response_format must be a boolean")
     data_url = "data:image/png;base64," + base64.b64encode(sheet_png).decode("ascii")
-    return {
+    user_text = _USER_TEMPLATE.format(expected_verb=expected_verb.strip())
+    if not use_response_format:
+        schema_text = json.dumps(
+            MOTION_ROLE_SCHEMA,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        user_text += (
+            " Return one JSON object matching this exact schema and allowed enum values; "
+            f"do not use Markdown: {schema_text}"
+        )
+    request = {
         "model": model,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -113,7 +137,7 @@ def motion_role_vlm_request(*, model: str, sheet_png: bytes, expected_verb: str)
                 "content": [
                     {
                         "type": "text",
-                        "text": _USER_TEMPLATE.format(expected_verb=expected_verb.strip()),
+                        "text": user_text,
                     },
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ],
@@ -122,15 +146,17 @@ def motion_role_vlm_request(*, model: str, sheet_png: bytes, expected_verb: str)
         "temperature": 0,
         "max_tokens": 384,
         "chat_template_kwargs": {"enable_thinking": False},
-        "response_format": {
+    }
+    if use_response_format:
+        request["response_format"] = {
             "type": "json_schema",
             "json_schema": {
                 "name": "mugen_motion_role",
                 "strict": True,
                 "schema": MOTION_ROLE_SCHEMA,
             },
-        },
-    }
+        }
+    return request
 
 
 def parse_motion_role_vlm_response(content: str) -> dict[str, Any]:

@@ -62,6 +62,21 @@ def test_request_binds_expected_verb_and_png() -> None:
     assert request["response_format"]["json_schema"]["strict"] is True
 
 
+def test_prompt_json_request_avoids_response_format_and_embeds_enum_schema() -> None:
+    request = motion_role_vlm_request(
+        model="qwen-test",
+        sheet_png=b"\x89PNG\r\n\x1a\nbytes",
+        expected_verb="idle",
+        use_response_format=False,
+    )
+
+    assert "response_format" not in request
+    prompt = request["messages"][1]["content"][0]["text"]
+    assert '"all_frames"' in prompt
+    assert '"same_primary_subject"' in prompt
+    assert "do not use Markdown" in prompt
+
+
 def test_stratified_sample_round_robins_splits_deterministically() -> None:
     records = []
     pixels = []
