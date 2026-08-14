@@ -37,8 +37,25 @@ try {
         if ($serviceState -ne 'active') {
             $compute = (& ssh -o BatchMode=yes -o ConnectTimeout=8 spark `
                 'nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader || true') -join "`n"
-            if ($compute.Trim().Length -ne 0) {
-                throw "Spark GPU is not idle:`n$compute"
+            $blockingCompute = @()
+            foreach ($line in ($compute -split "`r?`n")) {
+                if (-not $line.Trim()) { continue }
+                if ($line -notmatch '^\s*\d+\s*,\s*(.+)\s*,\s*(\d+)\s+MiB\s*$') {
+                    $blockingCompute += $line
+                    continue
+                }
+                $processName = $Matches[1].Trim()
+                $memoryMiB = [int]$Matches[2]
+                $idleStudioShell = (
+                    $processName -match '/studio/unsloth_studio/' -and
+                    $memoryMiB -le 1024
+                )
+                if (-not $idleStudioShell) {
+                    $blockingCompute += $line
+                }
+            }
+            if ($blockingCompute.Count -ne 0) {
+                throw "Spark GPU has a competing model process:`n$($blockingCompute -join "`n")"
             }
             & ssh -o BatchMode=yes -o ConnectTimeout=8 spark `
                 'systemctl --user start qwen-122b.service'
