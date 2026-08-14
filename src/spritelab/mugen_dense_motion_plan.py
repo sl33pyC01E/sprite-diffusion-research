@@ -32,14 +32,23 @@ def build_mugen_dense_motion_plan(
         raise ValueError("latent manifest has the wrong artifact kind")
     latent_source = _object(latent.get("source"), "latent source")
     materialization_sha256 = hashlib.sha256(materialization_bytes).hexdigest()
-    if latent_source.get("materialization_file_sha256") != materialization_sha256:
-        raise ValueError("latent cache was not encoded from this materialization")
+    latent_source_materialization_path = Path(
+        _text(latent_source, "materialization_path")
+    ).resolve()
+    latent_source_materialization_bytes = latent_source_materialization_path.read_bytes()
+    latent_source_materialization_sha256 = hashlib.sha256(
+        latent_source_materialization_bytes
+    ).hexdigest()
+    if latent_source.get("materialization_file_sha256") != latent_source_materialization_sha256:
+        raise ValueError("latent cache source materialization hash differs")
     sequences = _counted(materialization, "sequences", "sequence_count", "materialization")
     latent_rows = _counted(latent, "records", "record_count", "latent manifest")
     latent_by_sequence = _unique(latent_rows, "sequence_id", "latent manifest")
     sequence_by_id = _unique(sequences, "sequence_id", "materialization")
-    if set(latent_by_sequence) != set(sequence_by_id):
-        raise ValueError("latent sequence closure differs from materialization")
+    missing_latents = set(sequence_by_id) - set(latent_by_sequence)
+    if missing_latents:
+        raise ValueError(f"latent cache omits materialization sequences: {len(missing_latents)}")
+    unused_latents = set(latent_by_sequence) - set(sequence_by_id)
     by_identity: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for sequence in sequences:
         by_identity[_text(sequence, "identity_id")].append(sequence)
@@ -117,6 +126,13 @@ def build_mugen_dense_motion_plan(
             "latent_manifest": {
                 "file_sha256": hashlib.sha256(latent_bytes).hexdigest(),
                 "path": str(latent_path),
+                "scope": {
+                    "joined_sequences": len(sequence_by_id),
+                    "policy": "exact_closure_or_verified_superset",
+                    "source_materialization_file_sha256": (latent_source_materialization_sha256),
+                    "source_materialization_path": str(latent_source_materialization_path),
+                    "unused_latent_sequences": len(unused_latents),
+                },
             },
             "materialization": {
                 "file_sha256": materialization_sha256,

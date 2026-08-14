@@ -501,6 +501,11 @@ generated once for the broad appearance set. A dense join may consume that verif
 caption superset only when every selected variant's identity, split, reference-frame
 index, and exact reference-frame hash agree; unused broad captions are counted and
 cannot substitute for a missing dense caption.
+The frozen codec likewise encodes the broad sequence set once. The dense motion join
+accepts that latent-cache superset only after verifying the cache's source
+materialization hash and every selected sequence's identity, split, source pixel
+path/hash, latent geometry, and idle-reference frame. Extra broad latent rows are
+counted but ignored, avoiding a second multi-gigabyte cache for the dense subset.
 
 The stage-one still plan is appearance-only. It selects exactly one verified
 premultiplied-RGBA temporal-medoid frame from the idle clip of each identity and uses

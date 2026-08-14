@@ -117,7 +117,8 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path]:
         "source": {
             "materialization_file_sha256": hashlib.sha256(
                 materialization_path.read_bytes()
-            ).hexdigest()
+            ).hexdigest(),
+            "materialization_path": str(materialization_path),
         },
     }
     latent_path = tmp_path / "latents.json"
@@ -143,6 +144,7 @@ def test_dense_motion_plan_preserves_six_actions_and_idle_reference(tmp_path: Pa
     assert attack["reference"]["sequence_id"] == "sequence-0-idle"
     assert attack["target"]["phase"][-1] == 1.0
     assert len(attack["reference"]["latent"]["frame_array_content_sha256"]) == 64
+    assert plan["source"]["latent_manifest"]["scope"]["unused_latent_sequences"] == 0
 
     plan_path = tmp_path / "motion-plan.json"
     plan_path.write_text(json.dumps(plan), encoding="utf-8")
@@ -163,3 +165,24 @@ def test_dense_motion_plan_preserves_six_actions_and_idle_reference(tmp_path: Pa
         "attack_a",
         "attack_b",
     }
+
+
+def test_dense_motion_plan_accepts_verified_broad_latent_superset(tmp_path: Path) -> None:
+    broad_materialization, latent = _fixture(tmp_path)
+    broad = json.loads(broad_materialization.read_bytes())
+    selected = [row for row in broad["sequences"] if row["identity_id"] != "identity-2"]
+    subset = {
+        **broad,
+        "sequence_count": len(selected),
+        "sequences": selected,
+    }
+    subset_path = tmp_path / "dense-subset.json"
+    subset_path.write_text(json.dumps(subset), encoding="utf-8")
+
+    plan = build_mugen_dense_motion_plan(subset_path, latent)
+
+    assert plan["counts"]["sequences"] == 12
+    scope = plan["source"]["latent_manifest"]["scope"]
+    assert scope["joined_sequences"] == 12
+    assert scope["unused_latent_sequences"] == 6
+    assert scope["source_materialization_path"] == str(broad_materialization.resolve())
