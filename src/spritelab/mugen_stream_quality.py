@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
@@ -211,6 +212,8 @@ def _audit_character(
         raise ValueError(f"complete-six flag differs: {character.get('variant_id')}")
     view = _object(character.get("world_view_transform"), "world view transform")
     scale = float(view["scale"])
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("world view scale must be finite and positive")
     distinct_arrays = len({row["array_content_sha256"] for row in clip_rows})
     dynamic_slots = sum(row["dynamic"] for row in clip_rows)
     clipping = sum(row["clipped_visible_pixels"] for row in clip_rows)

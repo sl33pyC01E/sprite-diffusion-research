@@ -99,6 +99,15 @@ def test_zero_scale_floor_admits_any_positive_fitted_scale(tmp_path: Path) -> No
     assert "view_scale_below_minimum" not in row["dense_exclusion_reasons"]
 
 
+def test_quality_audit_rejects_nonpositive_source_scale(tmp_path: Path) -> None:
+    root = _fixture(tmp_path / "materialized", scale=0)
+
+    with pytest.raises(ValueError, match="world view scale must be finite and positive"):
+        build_mugen_stream_quality_audit(
+            (root,), policy=MugenStreamQualityPolicy(minimum_view_scale=0)
+        )
+
+
 def test_quality_audit_rejects_tampered_array(tmp_path: Path) -> None:
     root = _fixture(tmp_path / "materialized")
     value = np.load(root / "idle.npy", allow_pickle=False)
