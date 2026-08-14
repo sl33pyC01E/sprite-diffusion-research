@@ -148,7 +148,9 @@ def main() -> None:
             },
             "reference": {
                 "appearance_description": REFERENCE_APPEARANCE,
-                "conditioning_resize": "none; exact 480x480 frame padded 120px left/right to 720x480",
+                "conditioning_resize": (
+                    "none; exact 480x480 frame padded 120px left/right to 720x480"
+                ),
                 "file_sha256": REFERENCE_SHA256,
                 "identity_id": REFERENCE_IDENTITY_ID,
                 "path": str(REFERENCE),
