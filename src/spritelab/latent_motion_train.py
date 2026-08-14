@@ -883,37 +883,74 @@ def _balanced_matched_pairs(
     indices: tuple[int, ...],
     maximum_pairs: int,
 ) -> tuple[tuple[int, int], ...]:
-    """Select action contrasts round-robin across identities.
+    """Select action contrasts across identities and verb-pair families.
 
-    Every multi-action identity contributes its first lexical action pair before
-    any identity contributes a second pair. This keeps broad held-out evidence
-    from being dominated by identities with unusually large action sets.
+    Every multi-action identity contributes before any receives a second pair.
+    Within that constraint, selection prefers unused and underrepresented verb
+    pairs so lexical action order cannot dominate broad held-out evidence.
     """
 
     index = build_matched_action_index(corpus.rows, indices)
-    candidates = {
-        identity: tuple(
-            (verbs[left], verbs[right]) for left, right in combinations(range(len(verbs)), 2)
-        )
-        for identity, actions in index.items()
-        for verbs in (tuple(actions),)
-    }
+    return _balanced_pairs_from_index(index, maximum_pairs)
+
+
+def _balanced_pairs_from_index(
+    index: dict[str, dict[str, int]], maximum_pairs: int
+) -> tuple[tuple[int, int], ...]:
+    if isinstance(maximum_pairs, bool) or not isinstance(maximum_pairs, int):
+        raise ValueError("maximum_pairs must be an integer")
+    if maximum_pairs <= 0:
+        raise ValueError("maximum_pairs must be positive")
+    candidates: dict[str, list[tuple[str, str, int, int]]] = {}
+    pair_frequency: defaultdict[tuple[str, str], int] = defaultdict(int)
+    for identity, actions in index.items():
+        verbs = tuple(actions)
+        identity_candidates = []
+        for left, right in combinations(range(len(verbs)), 2):
+            left_verb, right_verb = verbs[left], verbs[right]
+            identity_candidates.append(
+                (left_verb, right_verb, actions[left_verb], actions[right_verb])
+            )
+            pair_frequency[(left_verb, right_verb)] += 1
+        candidates[identity] = identity_candidates
+
     output: list[tuple[int, int]] = []
-    round_index = 0
+    selected_per_identity: defaultdict[str, int] = defaultdict(int)
+    selected_per_verb: defaultdict[str, int] = defaultdict(int)
+    selected_pairs: set[tuple[str, str]] = set()
+    remaining = {
+        identity: list(identity_candidates) for identity, identity_candidates in candidates.items()
+    }
+
+    def candidate_key(identity: str, candidate: tuple[str, str, int, int]) -> tuple[Any, ...]:
+        left_verb, right_verb, _left_index, _right_index = candidate
+        verb_pair = (left_verb, right_verb)
+        return (
+            selected_per_identity[identity],
+            verb_pair in selected_pairs,
+            selected_per_verb[left_verb] + selected_per_verb[right_verb],
+            pair_frequency[verb_pair],
+            left_verb.encode(),
+            right_verb.encode(),
+            identity.encode(),
+        )
+
     while len(output) < maximum_pairs:
-        appended = False
-        for identity in sorted(candidates, key=str.encode):
-            pairs = candidates[identity]
-            if round_index >= len(pairs):
-                continue
-            left_verb, right_verb = pairs[round_index]
-            output.append((index[identity][left_verb], index[identity][right_verb]))
-            appended = True
-            if len(output) == maximum_pairs:
-                break
-        if not appended:
+        choices = [
+            (candidate_key(identity, candidate), identity, candidate)
+            for identity, identity_candidates in remaining.items()
+            for candidate in identity_candidates
+        ]
+        if not choices:
             break
-        round_index += 1
+        _key, identity, candidate = min(choices, key=lambda choice: choice[0])
+        left_verb, right_verb, left_index, right_index = candidate
+        output.append((left_index, right_index))
+        selected_per_identity[identity] += 1
+        selected_per_verb[left_verb] += 1
+        selected_per_verb[right_verb] += 1
+        selected_pairs.add((left_verb, right_verb))
+        remaining[identity].remove(candidate)
     if not output:
         raise LatentMotionTrainingError("split has no matched action pairs")
     return tuple(output)

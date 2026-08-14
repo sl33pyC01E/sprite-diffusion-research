@@ -6,7 +6,9 @@ import pytest
 
 from spritelab.latent_motion_train import (
     LatentMotionTrainingConfig,
+    LatentMotionTrainingError,
     LatentMotionTrainingRow,
+    _balanced_pairs_from_index,
     _config_from_dict,
     _ema_update,
     _paired_action_metrics,
@@ -110,3 +112,23 @@ def test_paired_action_metrics_reject_shape_mismatch() -> None:
             permuted_pm=target,
             target_pm=target,
         )
+
+
+def test_balanced_pairs_cover_identities_then_diversify_verbs() -> None:
+    index = {
+        "a": {"crouch": 0, "idle": 1, "walk": 2},
+        "b": {"crouch": 3, "idle": 4},
+        "c": {"run": 5, "walk": 6},
+    }
+
+    pairs = _balanced_pairs_from_index(index, 4)
+
+    assert set(pairs[:3]) == {(0, 2), (3, 4), (5, 6)}
+    assert pairs[3] == (1, 2)
+
+
+def test_balanced_pairs_validate_limit_and_empty_index() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        _balanced_pairs_from_index({}, 0)
+    with pytest.raises(LatentMotionTrainingError, match="no matched action pairs"):
+        _balanced_pairs_from_index({}, 1)
