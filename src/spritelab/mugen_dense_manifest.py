@@ -116,6 +116,7 @@ def build_mugen_dense_manifest(
     slot_counts: Counter[str] = Counter()
     for source_index, character, audit, by_slot in characters:
         variant_id = _text(character, "variant_id")
+        source_identity_id = _text(character, "identity_id")
         definitions = character.get("definitions")
         if not isinstance(definitions, list):
             raise ValueError(f"definitions are invalid: {variant_id}")
@@ -160,7 +161,7 @@ def build_mugen_dense_manifest(
                     "label": label,
                     "text_source": "mugen_def_identity_only_uncaptioned",
                 },
-                "identity_id": _text(character, "identity_id"),
+                "identity_id": _training_identity_id(variant_id),
                 "quality": {
                     "dense_exclusion_reasons": audit["dense_exclusion_reasons"],
                     "distinct_slot_arrays": int(audit["distinct_slot_arrays"]),
@@ -176,6 +177,7 @@ def build_mugen_dense_manifest(
                 },
                 "sff_sha256": _text(sff, "sha256"),
                 "source": source,
+                "source_identity_id": source_identity_id,
                 "source_index": source_index,
                 "split": split_by_variant[variant_id],
                 "variant_id": variant_id,
@@ -217,6 +219,17 @@ def build_mugen_dense_manifest(
             "train": "exact-training-member in-distribution reconstruction and steering",
             "validation": "identity-component-held-out model selection diagnostic",
         },
+        "identity_policy": {
+            "source_identity_id": "exact source-SFF visual identity retained as provenance",
+            "training_identity_id": (
+                "one stable ID per character/AIR variant; alternate authored animation "
+                "definitions over one SFF remain usable"
+            ),
+            "visual_leakage_control": (
+                "all variants sharing exact SFF, arrays, frames, or normalized identity "
+                "labels remain in one transitive split component"
+            ),
+        },
         "split_policy": {
             "grouping": (
                 "transitive normalized identity provenance labels plus exact full-SFF, "
@@ -229,6 +242,15 @@ def build_mugen_dense_manifest(
             "validation": "stable component digest buckets 900-949 of 1000",
         },
     }
+
+
+def _training_identity_id(variant_id: str) -> str:
+    return (
+        "mugen_character_"
+        + hashlib.sha256(f"mugen_variant_training_identity_v1\0{variant_id}".encode()).hexdigest()[
+            :32
+        ]
+    )
 
 
 def _evaluation_probe(

@@ -29,6 +29,7 @@ def _root(
     color_offset: int = 0,
     display_name: str | None = None,
     scale: float = 1.0,
+    identity_id: str | None = None,
 ) -> Path:
     root.mkdir()
     clips = []
@@ -76,7 +77,7 @@ def _root(
         "clips": clips,
         "complete_six_slot_core": True,
         "definitions": [{"display_name": display_name or variant, "name": variant}],
-        "identity_id": f"identity-{variant}",
+        "identity_id": identity_id or f"identity-{variant}",
         "source": {
             "air": {"sha256": "b" * 64},
             "archive_sha256": "c" * 64,
@@ -153,6 +154,36 @@ def test_dense_manifest_keeps_normalized_identity_labels_in_one_split(tmp_path: 
     assert any(
         "identity_label:m bison" in component["tokens"] for component in manifest["components"]
     )
+
+
+def test_same_sff_variants_get_distinct_training_ids_in_one_split(tmp_path: Path) -> None:
+    first_idle = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+    first_idle[:, 10:14, 10:14] = (1, 2, 3, 255)
+    first_idle[4:, 14:18, 10:14] = (3, 2, 1, 255)
+    second_idle = first_idle.copy()
+    first = _root(
+        tmp_path / "first",
+        variant="variant-a",
+        sff_sha="a" * 64,
+        shared_idle=first_idle,
+        identity_id="source-sff-identity",
+    )
+    second = _root(
+        tmp_path / "second",
+        variant="variant-b",
+        sff_sha="a" * 64,
+        shared_idle=second_idle,
+        color_offset=10,
+        identity_id="source-sff-identity",
+    )
+    quality = tmp_path / "quality.json"
+    export_mugen_stream_quality_audit((first, second), quality, disk_guard=DiskGuard(tmp_path, 0))
+
+    manifest = build_mugen_dense_manifest((first, second), quality)
+
+    assert len({row["identity_id"] for row in manifest["records"]}) == 2
+    assert {row["source_identity_id"] for row in manifest["records"]} == {"source-sff-identity"}
+    assert len({row["split"] for row in manifest["records"]}) == 1
 
 
 def test_dense_subset_inherits_broad_universe_split(tmp_path: Path) -> None:
