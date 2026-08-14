@@ -78,6 +78,19 @@ function Resolve-TrainingLaunch {
     throw "No immutable continuation slot remains for $Base"
 }
 
+function Resolve-LogPair {
+    param([Parameter(Mandatory = $true)][string]$BaseStem)
+    for ($version = 0; $version -le 99; $version++) {
+        $stem = if ($version -eq 0) { $BaseStem } else { "$BaseStem-retry-v$version" }
+        $out = Join-Path $reports "$stem.out.log"
+        $err = Join-Path $reports "$stem.err.log"
+        if (-not (Test-Path -LiteralPath $out) -and -not (Test-Path -LiteralPath $err)) {
+            return [pscustomobject]@{ Out = $out; Err = $err }
+        }
+    }
+    throw "No immutable retry log slot remains for $BaseStem"
+}
+
 function Wait-GpuIdle {
     while ($true) {
         $usedMemory = (& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits |
@@ -102,7 +115,7 @@ $trainingLaunch = Resolve-TrainingLaunch -Base $runBase
 $run = $trainingLaunch.Output
 $checkpoint = Join-Path $run 'training-step-0020000.pt'
 $audit = Resolve-ImmutableArtifactDirectory -Base $auditBase -CompletionFile 'audit-report.json'
-$latents = Resolve-ImmutableArtifactDirectory -Base $latentsBase -CompletionFile 'manifest.json'
+$latents = $latentsBase
 $trainStem = Split-Path $run -Leaf
 $auditStem = Split-Path $audit -Leaf
 $latentStem = Split-Path $latents -Leaf
@@ -110,8 +123,6 @@ $trainOut = Join-Path $reports "$trainStem.out.log"
 $trainErr = Join-Path $reports "$trainStem.err.log"
 $auditOut = Join-Path $reports "$auditStem.out.log"
 $auditErr = Join-Path $reports "$auditStem.err.log"
-$latentOut = Join-Path $reports "$latentStem.out.log"
-$latentErr = Join-Path $reports "$latentStem.err.log"
 
 $trainingArguments = @(
     (Join-Path $root 'scripts\run_mugen_sprite_autoencoder_2x_v1.py'),
@@ -183,11 +194,7 @@ if (
 $checkpointSha256 = (Get-FileHash -LiteralPath $checkpoint -Algorithm SHA256).Hash.ToLowerInvariant()
 $latentManifest = Join-Path $latents 'manifest.json'
 if (-not (Test-Path -LiteralPath $latentManifest)) {
-    foreach ($log in @($latentOut, $latentErr)) {
-        if (Test-Path -LiteralPath $log) {
-            throw "Refusing to replace latent-export log: $log"
-        }
-    }
+    $latentLogs = Resolve-LogPair -BaseStem $latentStem
     $encoding = Start-Process -FilePath $python -ArgumentList @(
         (Join-Path $root 'scripts\export_mugen_rgba_latents_2x_v1.py'),
         '--materialization', $manifest,
@@ -197,7 +204,7 @@ if (-not (Test-Path -LiteralPath $latentManifest)) {
         '--batch-sequences', '8',
         '--device', 'cuda'
     ) -WorkingDirectory $root -WindowStyle Hidden -Wait -PassThru `
-        -RedirectStandardOutput $latentOut -RedirectStandardError $latentErr
+        -RedirectStandardOutput $latentLogs.Out -RedirectStandardError $latentLogs.Err
     if ($encoding.ExitCode -ne 0) {
         throw "Broad latent export exited with code $($encoding.ExitCode)"
     }
