@@ -14,9 +14,9 @@ $materializations = @(
     (Join-Path $processed 'mugen-mffa-schema-core-b128-f8-v2'),
     (Join-Path $processed 'mugen-anime-all-stars3-schema-core-b128-f8-v2')
 )
-$quality = Join-Path $reports 'mugen-six-action-coverage-scale025-quality-audit-v1.json'
-$dense = Join-Path $processed 'mugen-six-action-dense-coverage-scale025-v1.json'
-$bridge = Join-Path $processed 'mugen-six-action-dense-coverage-scale025-autoencoder-v1.json'
+$quality = Join-Path $reports 'mugen-six-action-coverage-all-scales-quality-audit-v1.json'
+$dense = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-v1.json'
+$bridge = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-autoencoder-v1.json'
 
 if (Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue) {
     Wait-Process -Id $WaitForProcessId
@@ -38,7 +38,7 @@ foreach ($materialization in $materializations) {
 }
 $auditArguments += @(
     '--minimum-view-scale',
-    '0.25',
+    '0.000001',
     '--output',
     $quality
 )

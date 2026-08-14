@@ -501,15 +501,15 @@ thresholds, not deletion rules; excluded rows and exact reasons remain in the au
 Every NPY file byte hash, canonical array hash, shape, dtype, per-frame visible-pixel
 count, and nonempty-frame hash is reverified before either view is published.
 
-Scale is published as two explicit subtiers rather than used as a hidden architecture
-limit. The high-fidelity control requires a shared-view scale of at least `0.5`, so
-native art is reduced by no more than 2x. The main dense-coverage tier requires at
-least `0.25`, allowing up to 4x reduction while retaining the full fighter and zero
-visible-pixel clipping. Live audits of complete JUS and partial Ascension records show
-that the coverage threshold retains roughly 92--94% of complete fighters, versus
-70--82% for the high-fidelity threshold. The broad codec/appearance view retains even
-the remaining scale outliers; no source character is deleted. Results must be broken
-out by scale tier so added coverage cannot masquerade as high-fidelity evidence.
+Scale is published as an evaluation variable rather than used as a hidden architecture
+limit. The main dense-coverage tier admits every complete, unclipped fighter with a
+positive fitted scale; native scale is retained as exact metadata and cannot exclude
+an otherwise valid character. The `scale >= 0.5` slice, where native art is reduced by
+no more than 2x, remains a labeled high-fidelity evaluation/control slice only. Other
+scale bands may also be reported, but none controls main-corpus admission. The broad
+codec/appearance view likewise retains scale outliers; no source character is deleted.
+Results must be stratified by scale so added coverage cannot masquerade as
+high-fidelity evidence.
 
 Dataset splits are transitive components, not independent rows. Exact full-SFF,
 complete action-array, and nonempty-frame hashes are grouped, and conservative DEF
