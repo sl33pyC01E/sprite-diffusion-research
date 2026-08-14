@@ -1404,8 +1404,24 @@ def _export_validation_previews(
                     inference_steps=inference_steps,
                     sampler_algorithm=sampler_algorithm,
                 )
+                counterfactual_residual = _sample_motion_residual(
+                    runtime,
+                    model,
+                    noise=noise,
+                    reference=reference,
+                    actions=runtime.flip(actions, (0,)),
+                    phases=phases,
+                    inference_steps=inference_steps,
+                    sampler_algorithm=sampler_algorithm,
+                )
                 latent = (reference.unsqueeze(1) + residual) * std + mean
+                counterfactual_latent = (
+                    reference.unsqueeze(1) + counterfactual_residual
+                ) * std + mean
                 decoded = decoder.decode(latent.reshape(-1, 8, 64, 64)).clamp(0, 1)
+                counterfactual_decoded = decoder.decode(
+                    counterfactual_latent.reshape(-1, 8, 64, 64)
+                ).clamp(0, 1)
             arrays = (
                 decoded.mul(255)
                 .round()
@@ -1415,8 +1431,18 @@ def _export_validation_previews(
                 .cpu()
                 .numpy()
             )
+            counterfactual_arrays = (
+                counterfactual_decoded.mul(255)
+                .round()
+                .to(runtime.uint8)
+                .reshape(2, 8, 4, 128, 128)
+                .permute(0, 1, 3, 4, 2)
+                .cpu()
+                .numpy()
+            )
             for offset, row_index in enumerate(pair):
                 row = corpus.rows[row_index]
+                replacement = corpus.rows[pair[1 - offset]]
                 target_preview = export_rgba_clip_preview(
                     corpus.target_rgba[row_index],
                     output,
@@ -1437,18 +1463,60 @@ def _export_validation_previews(
                     preserve_frame_slots=True,
                     disk_guard=disk_guard,
                 )
+                counterfactual_preview = export_rgba_clip_preview(
+                    counterfactual_arrays[offset],
+                    output,
+                    artifact_stem=(
+                        f"{pair_index:02d}-{offset}-{row.identity_id[-8:]}-{row.verb}-"
+                        f"action-swap-to-{replacement.verb}"
+                    ),
+                    duration_ms=row.duration_ms,
+                    loop_mode=_preview_loop_mode(row.loop_mode),
+                    integer_scale=2,
+                    preserve_frame_slots=True,
+                    disk_guard=disk_guard,
+                )
                 rows.append(
                     {
+                        "counterfactual_action": replacement.verb,
+                        "counterfactual_animated_path": _preview_relative_path(
+                            counterfactual_preview.animated_png_path, output
+                        ),
+                        "counterfactual_animated_sha256": (
+                            counterfactual_preview.animated_png_sha256
+                        ),
+                        "counterfactual_sheet_path": _preview_relative_path(
+                            counterfactual_preview.contact_sheet_path, output
+                        ),
+                        "counterfactual_sheet_sha256": (
+                            counterfactual_preview.contact_sheet_sha256
+                        ),
+                        "generated_animated_path": _preview_relative_path(
+                            generated_preview.animated_png_path, output
+                        ),
                         "generated_animated_sha256": generated_preview.animated_png_sha256,
+                        "generated_sheet_path": _preview_relative_path(
+                            generated_preview.contact_sheet_path, output
+                        ),
                         "generated_sheet_sha256": generated_preview.contact_sheet_sha256,
                         "identity_id": row.identity_id,
                         "sequence_id": row.sequence_id,
+                        "target_animated_path": _preview_relative_path(
+                            target_preview.animated_png_path, output
+                        ),
                         "target_animated_sha256": target_preview.animated_png_sha256,
+                        "target_sheet_path": _preview_relative_path(
+                            target_preview.contact_sheet_path, output
+                        ),
                         "target_sheet_sha256": target_preview.contact_sheet_sha256,
                         "verb": row.verb,
                     }
                 )
     return rows
+
+
+def _preview_relative_path(path: Path, output: Path) -> str:
+    return f"{output.name}/{path.name}"
 
 
 def _load_frozen_decoder(runtime: Any, corpus: LatentMotionTrainingCorpus, *, device: Any) -> Any:
