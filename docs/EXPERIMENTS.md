@@ -636,3 +636,32 @@ action reconstruction. They do not yet establish multi-identity generalization;
 the next training gate must hold identities out and must separately label the
 fighter, assist, transformation, projectile, and full-screen-effect roles present
 in MUGEN actions.
+
+## MUGEN broad held-out motion baseline
+
+The first identity-disjoint broad baseline used the canonical primary-motion-v2
+corpus: 1,443 clips from 225 identities with 1,082 train clips and 191 untouched
+test clips. It trained the reference-conditioned latent DiT for 15,000 endpoint
+steps. The final EMA checkpoint SHA-256 is
+`7235e6cba9d891fff5cae7b564457c99db6fadfbf1d4e10a7fa4a4f3b0198027` and
+the training report SHA-256 is
+`02f86d07172b19ba1b3742f407d8ba010f0b74cc8a527d1bdd446ad016d3f06d`.
+
+A deterministic balanced test uses 64 contrasts spanning all 28 multi-action test
+identities, 62 distinct verb pairs, and 9--11 occurrences of every canonical verb.
+At step 15,000, PM-RGBA MAE is `0.0735174`, alpha IoU is `0.478741`, and
+temporal-delta MAE is `0.0389035`. Action-token dependence is measurable: decoded
+action separation ratio `0.660392`, correct-target preference `0.6875`, and
+`0.765625` of swaps move toward the replacement target. The evaluation report
+SHA-256 is `eed19463c5b2d41d4eecaa5c468328d5bef9c1ade940edf60452753993b7fa05`.
+Despite those causal metrics, unseen outputs are visibly blurry and sometimes
+collapse into coarse colored silhouettes. This is not a quality pass.
+
+The frozen codec was then audited independently on every one of the 191 untouched
+test clips. Its PM-RGBA MAE is `0.00230338`, alpha IoU is `0.990818`, and
+temporal-delta MAE is `0.00148315`. The codec-floor report SHA-256 is
+`0debf58aeafbf81cfd0c4feff9249e55f6d6c2e2d7df41bc4c364212cc760eec`.
+The codec therefore preserves the required pixel structure; the quality failure
+belongs to the broad endpoint denoiser/training objective. The next broad run must
+use a genuine multi-timestep generative objective and multi-step solver, or a
+pretrained spatial/video prior. It must not repeat a longer one-step endpoint run.

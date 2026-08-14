@@ -9,6 +9,7 @@ from spritelab.latent_motion_train import (
     LatentMotionTrainingError,
     LatentMotionTrainingRow,
     _balanced_pairs_from_index,
+    _checkpoint_action_vocabulary,
     _config_from_dict,
     _ema_checkpoint_artifact_kind,
     _ema_update,
@@ -151,3 +152,22 @@ def test_evaluator_accepts_inference_and_resume_ema_checkpoints(
 def test_evaluator_rejects_unknown_checkpoint_kind() -> None:
     with pytest.raises(LatentMotionTrainingError, match="wrong artifact kind"):
         _ema_checkpoint_artifact_kind({"artifact_kind": "untrusted"})
+
+
+def test_resume_checkpoint_uses_corpus_bound_action_vocabulary() -> None:
+    checkpoint = {"corpus": {"action_vocabulary": ["idle", "walk"]}}
+
+    assert _checkpoint_action_vocabulary(
+        checkpoint, "mugen_reference_latent_motion_resume_checkpoint"
+    ) == ["idle", "walk"]
+
+
+def test_inference_checkpoint_requires_top_level_action_vocabulary() -> None:
+    checkpoint = {"corpus": {"action_vocabulary": ["idle", "walk"]}}
+
+    assert (
+        _checkpoint_action_vocabulary(
+            checkpoint, "mugen_reference_latent_motion_ema_inference_checkpoint"
+        )
+        is None
+    )

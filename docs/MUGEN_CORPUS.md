@@ -263,3 +263,12 @@ turn, and walk). The five rejections occur only in broader death, special-attack
 super-attack, and victory candidates. This bounded precision audit supports the
 current canonical verb slice; it is not a collection-wide recall estimate and
 does not replace the exact pixel gate.
+
+The historical still-plan-v1 held-out gallery is also non-canonical. In
+particular, `sequence_01ad78ce15d11303392281009aa154e2` pairs an orange-furred
+fighter description with an effect-only blue target. The exact pixel audit marks
+all eight frames failed (`pixel_gate_status=all_fail`, no passing indices), and
+the canonical primary-motion manifest excludes it. Therefore
+`data/inference/mugen-mffa-sd14-lora-step2500-heldout-comparison-v1/` must not be
+shown as valid target/generation evidence. Its retained files document why the
+subject-bearing gate was added; they do not describe the corrected corpus.

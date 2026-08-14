@@ -501,7 +501,7 @@ def evaluate_latent_motion_checkpoint(
     corpus = load_latent_motion_training_corpus(manifest_path, verify_hashes=True)
     if checkpoint.get("corpus") != corpus.contract:
         raise LatentMotionTrainingError("inference checkpoint corpus differs")
-    if checkpoint.get("action_vocabulary") != list(corpus.action_vocabulary):
+    if _checkpoint_action_vocabulary(checkpoint, checkpoint_kind) != list(corpus.action_vocabulary):
         raise LatentMotionTrainingError("inference checkpoint action vocabulary differs")
     checkpoint_config = _config_from_dict(checkpoint.get("config"))
     runtime_device = runtime.device(device)
@@ -605,6 +605,15 @@ def _ema_checkpoint_artifact_kind(checkpoint: Any) -> str:
     if artifact_kind not in allowed:
         raise LatentMotionTrainingError("EMA checkpoint has the wrong artifact kind")
     return artifact_kind
+
+
+def _checkpoint_action_vocabulary(checkpoint: dict[str, Any], artifact_kind: str) -> Any:
+    vocabulary = checkpoint.get("action_vocabulary")
+    if vocabulary is None and artifact_kind == "mugen_reference_latent_motion_resume_checkpoint":
+        corpus = checkpoint.get("corpus")
+        if isinstance(corpus, dict):
+            vocabulary = corpus.get("action_vocabulary")
+    return vocabulary
 
 
 def _train(
