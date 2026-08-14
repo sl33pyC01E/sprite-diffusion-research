@@ -15,8 +15,8 @@ from PIL import Image
 
 MODEL = Path("/home/sleepy/sprite-lab-cogvideox/CogVideoX-5b-I2V-a6f0f4858a83")
 REFERENCE = Path("/home/sleepy/sprite-lab-cogvideox/reference-orange-fighter-idle-frame0-480.png")
-OUTPUT = Path("/home/sleepy/sprite-lab-cogvideox/probe-orange-fighter-normal-attack-v1")
-SOURCE_INDEX_SHA256 = "2f0271f75f7c2eaf8a39158b6e492f19b5bd7d4b9fe0b6e2467b9e982311b4de"
+OUTPUT = Path("/home/sleepy/sprite-lab-cogvideox/probe-orange-fighter-normal-attack-v2")
+SOURCE_INDEX_SHA256 = "98fbc592f23269a38d039d16f969844a9da073b56b24567772433d4b02e2f831"
 REFERENCE_SHA256 = "54634db9685c680e125b7b1b0a40b1657192db47ab6c2d6c2b7457142b18d0c9"
 REFERENCE_SOURCE_VIDEO_SHA256 = "993911108ecbc0b4423167c27894d538823e8c9db9db3a0a925cb3eafe0de1ad"
 REFERENCE_IDENTITY_ID = "mugen_13b410983214b11c_cd8d7683410b1695"
