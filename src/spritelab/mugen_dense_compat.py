@@ -242,14 +242,20 @@ def build_mugen_dense_captioned_materialization(
             or not 0 <= frame_index < 8
         ):
             raise ValueError(f"caption reference frame index differs: {variant_id}")
-        if _digest(row, "reference_frame_array_content_sha256") != reference_by_variant.get(
-            variant_id
+        expected_reference = reference_by_variant.get(variant_id)
+        if (
+            expected_reference is not None
+            and _digest(row, "reference_frame_array_content_sha256") != expected_reference
         ):
             raise ValueError(f"caption reference frame differs: {variant_id}")
         caption_by_variant[variant_id] = row
     variants = {sequence["provenance"]["variant_id"] for sequence in artifact["sequences"]}
-    if set(caption_by_variant) != variants:
-        raise ValueError("caption variant closure differs from dense materialization")
+    missing_captions = variants - set(caption_by_variant)
+    if missing_captions:
+        raise ValueError(
+            f"caption manifest omits dense materialization variants: {len(missing_captions)}"
+        )
+    unused_captions = set(caption_by_variant) - variants
     for sequence in artifact["sequences"]:
         row = caption_by_variant[sequence["provenance"]["variant_id"]]
         if (
@@ -263,7 +269,7 @@ def build_mugen_dense_captioned_materialization(
             "reference_frame_array_content_sha256": _digest(
                 row, "reference_frame_array_content_sha256"
             ),
-            "reference_frame_index": frame_index,
+            "reference_frame_index": int(row["frame_index"]),
             "request_body_sha256": _digest(row, "request_body_sha256"),
         }
         sequence["entity_class"] = _text(
@@ -283,6 +289,11 @@ def build_mugen_dense_captioned_materialization(
     }
     artifact["source"]["caption_manifest_file_sha256"] = caption_sha256
     artifact["source"]["caption_manifest_path"] = str(caption_path)
+    artifact["source"]["caption_manifest_scope"] = {
+        "joined_variants": len(variants),
+        "policy": "exact_closure_or_verified_superset",
+        "unused_caption_variants": len(unused_captions),
+    }
     artifact["source_snapshot"]["canonical_sha256"] = hashlib.sha256(
         (artifact["source_snapshot"]["canonical_sha256"] + "\0" + caption_sha256).encode()
     ).hexdigest()

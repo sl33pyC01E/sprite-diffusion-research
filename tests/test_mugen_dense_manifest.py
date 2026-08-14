@@ -28,6 +28,7 @@ def _root(
     shared_idle: np.ndarray,
     color_offset: int = 0,
     display_name: str | None = None,
+    scale: float = 1.0,
 ) -> Path:
     root.mkdir()
     clips = []
@@ -82,7 +83,7 @@ def _root(
             "sff": {"sha256": sff_sha},
         },
         "variant_id": variant,
-        "world_view_transform": {"scale": 1.0},
+        "world_view_transform": {"scale": scale},
     }
     (root / "materialization.json").write_text(
         json.dumps({"characters": [character], "projection_version": 2}), encoding="utf-8"
@@ -151,6 +152,50 @@ def test_dense_manifest_keeps_normalized_identity_labels_in_one_split(tmp_path: 
     assert len({row["split"] for row in manifest["records"]}) == 1
     assert any(
         "identity_label:m bison" in component["tokens"] for component in manifest["components"]
+    )
+
+
+def test_dense_subset_inherits_broad_universe_split(tmp_path: Path) -> None:
+    first_idle = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+    first_idle[:, 10:14, 10:14] = (1, 2, 3, 255)
+    first_idle[4:, 14:18, 10:14] = (3, 2, 1, 255)
+    second_idle = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+    second_idle[:, 20:24, 20:24] = (7, 8, 9, 255)
+    second_idle[4:, 24:28, 20:24] = (9, 8, 7, 255)
+    dense_root = _root(
+        tmp_path / "dense-root",
+        variant="variant-dense",
+        sff_sha="a" * 64,
+        shared_idle=first_idle,
+        display_name="Shared Family",
+    )
+    broad_only_root = _root(
+        tmp_path / "broad-root",
+        variant="variant-broad-only",
+        sff_sha="d" * 64,
+        shared_idle=second_idle,
+        color_offset=10,
+        display_name="shared-family",
+        scale=0.25,
+    )
+    quality = tmp_path / "quality.json"
+    roots = (dense_root, broad_only_root)
+    export_mugen_stream_quality_audit(roots, quality, disk_guard=DiskGuard(tmp_path, 0))
+
+    dense = build_mugen_dense_manifest(roots, quality, tier="dense")
+    broad = build_mugen_dense_manifest(roots, quality, tier="broad")
+
+    assert dense["counts"]["characters"] == 1
+    assert dense["counts"]["split_universe_characters"] == 2
+    assert dense["counts"]["selected_components"] == 1
+    dense_record = dense["records"][0]
+    broad_record = next(
+        row for row in broad["records"] if row["variant_id"] == dense_record["variant_id"]
+    )
+    assert dense_record["split"] == broad_record["split"]
+    assert any(
+        set(component["variant_ids"]) == {"variant-dense", "variant-broad-only"}
+        for component in dense["components"]
     )
 
 

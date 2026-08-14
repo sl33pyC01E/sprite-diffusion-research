@@ -49,6 +49,7 @@ def build_mugen_dense_manifest(
     }
 
     characters = []
+    split_universe = []
     source_rows = []
     seen_variants: set[str] = set()
     for source_index, value in enumerate(materialization_roots):
@@ -78,8 +79,7 @@ def build_mugen_dense_manifest(
             audit = quality_by_variant.get(variant_id)
             if audit is None:
                 raise ValueError(f"quality audit omits variant: {variant_id}")
-            eligible = bool(audit[f"{tier}_eligible"])
-            if not eligible:
+            if not bool(audit["broad_eligible"]):
                 continue
             clips = row.get("clips")
             if not isinstance(clips, list) or any(not isinstance(clip, dict) for clip in clips):
@@ -87,12 +87,15 @@ def build_mugen_dense_manifest(
             by_slot = {_text(clip, "slot"): clip for clip in clips}
             if "idle" not in by_slot:
                 continue
-            characters.append((source_index, row, audit, by_slot))
+            normalized = (source_index, row, audit, by_slot)
+            split_universe.append(normalized)
+            if bool(audit[f"{tier}_eligible"]):
+                characters.append(normalized)
     missing_quality = set(quality_by_variant) - seen_variants
     if missing_quality:
         raise ValueError(f"quality audit has unknown variants: {len(missing_quality)}")
 
-    components = _leakage_components(characters)
+    components = _leakage_components(split_universe)
     split_by_variant = {}
     component_rows = []
     for component in components:
@@ -179,6 +182,7 @@ def build_mugen_dense_manifest(
             }
         )
     records.sort(key=lambda row: row["variant_id"].encode("utf-8"))
+    selected_variants = {row["variant_id"] for row in records}
     evaluation_probes = {
         split: _evaluation_probe(records, split=split, maximum_characters=32)
         for split in ("train", "validation", "test")
@@ -190,6 +194,10 @@ def build_mugen_dense_manifest(
             "actions": sum(len(row["actions"]) for row in records),
             "characters": len(records),
             "components": len(component_rows),
+            "selected_components": sum(
+                bool(selected_variants.intersection(row["variant_ids"])) for row in component_rows
+            ),
+            "split_universe_characters": len(split_universe),
             "slots": dict(sorted(slot_counts.items())),
             "splits": dict(sorted(Counter(row["split"] for row in records).items())),
             "unique_sff_identities": len({row["sff_sha256"] for row in records}),
@@ -211,8 +219,9 @@ def build_mugen_dense_manifest(
         },
         "split_policy": {
             "grouping": (
-                "transitive normalized DEF identity labels plus exact full-SFF, "
-                "action-array, and nonempty-frame SHA-256 components"
+                "transitive normalized identity provenance labels plus exact full-SFF, "
+                "action-array, and nonempty-frame SHA-256 components over the complete "
+                "broad-eligible universe; dense records inherit those splits"
             ),
             "identity_label_normalization": "Unicode NFKC, casefold, alphanumeric tokens",
             "test": "stable component digest buckets 950-999 of 1000",

@@ -494,6 +494,13 @@ The dense autoencoder bridge is zero-copy: it points the verified generic traini
 loader at the two source materialization roots instead of duplicating clip tensors.
 Until literal Spark captions are joined, its DEF-label descriptions are explicitly
 `autoencoder_only`; conditional-generation trainers fail closed on that artifact.
+Broad and dense views now share one split universe: transitive duplicate and literal
+identity-label components are built over every broad-eligible character with an idle
+reference, and the dense motion subset inherits those assignments. Captions are
+generated once for the broad appearance set. A dense join may consume that verified
+caption superset only when every selected variant's identity, split, reference-frame
+index, and exact reference-frame hash agree; unused broad captions are counted and
+cannot substitute for a missing dense caption.
 
 The earlier MFFA and Anime All Stars schema-v2 materializations are now admitted
 through a strict zero-copy compatibility view rather than being abandoned or copied.
@@ -506,16 +513,19 @@ because the source predates the streamed projector.
 
 The exact combined legacy audit contains 332 characters: 306 have all six slots,
 168 pass the broad gate, and 110 pass the dense gate. The dense view contributes
-660 action clips and 107 unique SFF identities, split into 98 train, 6 validation,
-and 6 test characters. Exclusions remain indexed: 162 characters report visible
+660 action clips and 107 unique SFF identities. Splits are assigned over all 160
+broad-eligible characters that have an idle reference, so the dense subset inherits
+92 train, 11 validation, and 7 test characters. Exclusions remain indexed: 162 characters report visible
 clipping, 67 fall below the view-scale threshold, 26 lack all six actions, 6 have
 too few dynamic slots, 5 have too few distinct action arrays, and 2 contain empty
 output frames/slots (reasons can overlap). The canonical quality audit is
 `data/index/reports/mugen-legacy-six-action-quality-audit-v1.json`, SHA-256
 `aef28c901ea550fefc2aba51e8041d7eda4e29e2f1cd3092a69fff4f97f7bb82`;
-the dense manifest is
-`data/processed/mugen-legacy-six-action-dense-v1.json`, SHA-256
-`60fb4bdfc1b78fa766b5c4f44051e6c77c1857f592abe4e7058f564df9dc17b4`.
+the current dense manifest is
+`data/processed/mugen-legacy-six-action-dense-v2.json`, SHA-256
+`4009847836d16907d1518f3ff3b994d5f9646d930900189f8faf5e5355f360a0`.
+The earlier v1 manifest is superseded because it computed split components over the
+dense subset alone instead of the common broad universe.
 
 The six-slot view is a first dense denominator, not a fixed model vocabulary. The
 official Elecbyte AIR standard assigns reserved animation numbers for standing,

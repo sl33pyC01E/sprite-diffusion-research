@@ -122,7 +122,7 @@ def test_captioned_dense_bridge_enables_conditional_loading(tmp_path: Path) -> N
     reference_sha256 = dense_value["records"][0]["reference"]["frame_array_content_sha256"]
     caption = {
         "artifact_kind": "mugen_dense_literal_visual_caption_dataset",
-        "record_count": 1,
+        "record_count": 2,
         "records": [
             {
                 "identity_id": "identity-a",
@@ -133,7 +133,17 @@ def test_captioned_dense_bridge_enables_conditional_loading(tmp_path: Path) -> N
                 "structured_caption": {"subject_type": "humanoid"},
                 "training_appearance_prompt": "a stocky fighter in green clothing",
                 "variant_id": "variant-a",
-            }
+            },
+            {
+                "identity_id": "identity-unused",
+                "frame_index": 7,
+                "reference_frame_array_content_sha256": "d" * 64,
+                "request_body_sha256": "e" * 64,
+                "split": "validation",
+                "structured_caption": {"subject_type": "creature"},
+                "training_appearance_prompt": "an unused broad-corpus creature",
+                "variant_id": "variant-unused",
+            },
         ],
     }
     caption_path = tmp_path / "captions.json"
@@ -149,3 +159,9 @@ def test_captioned_dense_bridge_enables_conditional_loading(tmp_path: Path) -> N
     assert clips[0].request.entity_class == "humanoid"
     artifact = json.loads(output.read_text(encoding="utf-8"))
     assert artifact["model_eligibility"]["conditional_generation"] is True
+    assert artifact["source"]["caption_manifest_scope"] == {
+        "joined_variants": 1,
+        "policy": "exact_closure_or_verified_superset",
+        "unused_caption_variants": 1,
+    }
+    assert artifact["sequences"][0]["caption"]["reference_frame_index"] == 0
