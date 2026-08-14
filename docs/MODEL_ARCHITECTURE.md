@@ -591,7 +591,9 @@ is one canonical idle-medoid target per identity, so neither action frequency no
 animation length can dominate appearance learning. The trainer uses a
 rectified-flow objective with an explicit 25% pure-noise endpoint mixture,
 10% classifier-free text dropout, BF16 activations, FP32 parameters, EMA, and
-identity-disjoint validation.  Periodic safe-loadable checkpoints retain the
+identity-disjoint validation. During learning-rate warmup the EMA is an exact copy
+of the live model; fixed 0.9999 decay begins only afterward, so random initialization
+cannot remain mixed into the published inference weights. Periodic safe-loadable checkpoints retain the
 optimizer and all sampler/flow/dropout RNG states for power-loss continuation.
 Its final report keeps fixed-noise latent metrics for both exact training identities
 and identity-disjoint validation identities in separate fields; decoded RGBA sampling
@@ -633,6 +635,11 @@ blocks and preview galleries: target-distinct, verb-balanced pairs drawn from th
 training split, and target-distinct, verb-balanced pairs drawn from identities that
 never enter training. In-distribution failure is diagnosed as model/optimization
 failure; held-out failure is reported separately as a generalization limitation.
+Each gallery row now binds three matched animations with exact paths and hashes: the
+authored target, the requested-action output, and an action-token-substituted output
+generated from the same reference, frame phases, and noise. This makes directional
+token sensitivity visually inspectable rather than reducing it to one aggregate loss
+delta.
 
 ## Historical pretrained branch (superseded; do not reacquire)
 
