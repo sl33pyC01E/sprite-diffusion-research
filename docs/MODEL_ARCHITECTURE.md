@@ -640,3 +640,39 @@ provider file sizes before any transfer, enforces the 100-GiB free-space floor,
 resumes through the Hugging Face local cache, verifies every LFS SHA-256, retains
 partials after interruption, and publishes a no-clobber exact-file manifest only
 after the whole snapshot verifies.
+
+## Current architecture decision: compact latent sprite models from scratch
+
+The Qwen-Image/CogVideo LoRA branch above is historical and is not the current
+project direction. It was explored before the corpus was dense enough and required
+large external model downloads that were not appropriate for the intended compact,
+consumer-runnable result. No LoRA is part of the current plan.
+
+The current training sequence is:
+
+1. Train an RGBA sprite codec on source frames. It must preserve transparency,
+   hard edges, palette structure, and nearest-neighbor pixel geometry. Codec quality
+   is measured before generative training, including alpha IoU, foreground error,
+   background leakage, palette/crispness metrics, and exact reconstruction previews.
+2. Train a compact still-image latent DiT from scratch. Input is a detailed caption;
+   output is one canonical neutral/reference sprite latent decoded to RGBA.
+3. Train a reference-conditioned latent motion DiT from scratch. Input is the exact
+   reference sprite plus action/phase conditioning; output is a short latent action
+   clip. The identity does not have to be regenerated independently in every frame.
+4. Evaluate both in-distribution and identity-held-out requests. In-distribution
+   tests answer whether the architecture learned the dense action mapping at all;
+   held-out tests answer generalization only after coverage and training scale are
+   adequate. Neither substitutes for the other.
+
+The first dense control uses the MUGEN-standard six-slot projection: idle, walk,
+jump, block, attack A, and attack B for every character that supplies them. Native
+AIR phase sequences and every additional normal/special/super action remain in the
+source catalog and can be added as supported conditioning rather than being removed
+by a fixed model taxonomy. Exact SFF and rendered-pixel duplicate components are
+split together to prevent false held-out results.
+
+Only if a dense, quality-screened corpus of roughly 5,000 characters fails to produce
+notable results should pretrained teacher fine-tuning return as a fallback. That
+fallback would use full fine-tuning rather than LoRA, generate a separately indexed
+synthetic expansion corpus, and distill back into the compact student architecture.
+It is not authorized or required for the present native-corpus stage.

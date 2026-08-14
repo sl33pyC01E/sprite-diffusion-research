@@ -351,3 +351,87 @@ splits where available.  Its 128 contact sheets are intended for the pinned
 Qwen-3.5-122B same-subject/action-match audit.  No special/super token is admitted
 to the canonical trainer until that audit passes; rejected and ambiguous clips
 remain indexed instead of being silently coerced.
+
+## Dense standard-schema reset (2026-08-14)
+
+The earlier broad-motion experiments were data-pipeline diagnostics, not a fair
+capacity test of the intended model. They mixed sparse identities and uneven verbs,
+then emphasized identity-held-out failures before training a genuinely dense MUGEN
+distribution. That interpretation is superseded.
+
+The corpus now follows MUGEN's native AIR schema first. Every parseable character is
+indexed independently of model geometry, and the canonical dense view is idle,
+walk, jump, block, attack A, and attack B. Jump and guard phase actions remain
+separately addressable in the authoritative catalog. Run, hurt, death, spawn,
+victory/emote, normal attacks, specials, and supers also remain indexed; a six-slot
+view is a balanced training projection, never a reason to discard the other actions.
+
+The exact MFFA schema catalog contains 212 decoded characters. Raw AIR availability
+finds 207 complete six-slot characters; the native pixel materialization retains all
+212 and resolves 193 complete six-slot characters after action-local pixel/transform
+checks. The canonical leakage-safe fixed view contains 1,239 clips at
+`data/processed/mugen-mffa-schema-core-b128-f8-v2/`, manifest SHA-256
+`72731b487a2a4148b1945a67c34a6b41f96e178733dbd6917987038053be7f8b`.
+The first v1 split is non-canonical because 15 exact-pixel duplicate groups crossed
+split boundaries. The v2 splitter forms connected components over exact SFF and
+rendered array hashes before deterministic 90/5/5 assignment; zero exact-array
+duplicate group crosses its splits.
+
+Anime All Stars 3 is pinned as archive SHA-256
+`76556ed6959db685589ce3db15d1a527c270db7e08713dc853a9d0e0fb718299`
+(3,775,696,702 bytes). Its extracted character subtree was verified against the
+archive inventory at 3,337 files and 5,845,612,887 bytes with no traversal, symlink,
+duplicate, case-collision, missing-file, or size-mismatch finding. The corrected
+exact AIR catalog at
+`data/index/reports/mugen-anime-all-stars-3-air-schema-catalog-v2.json` has SHA-256
+`6e19f47a77603daaff16b30b87afb65e41e674b13e5ae446b9dbfc9d3c933c81`.
+It resolves 120 unique fighters and 30,961 authored actions: all 120 have idle,
+walk, jump, and attacks; 119 have block and therefore the complete six-slot view.
+The remaining 19 DEF failures are storyboards, corrupt alternates, or unresolved
+backup definitions and do not represent 19 missing primary fighters.
+
+The native v2 materialization recovers both legacy SFFv2 decompressed-size-prefix
+variants and action-locally quarantines corrupt SFFv1 nodes. It materializes all 120
+fighters and 713 core slots, with 113 fighters retaining all six pixel-resolved
+slots. Its manifest SHA-256 is
+`755a2d58b3d267f09e270d0f08a55f675def7e871064d9c253a2b71e0b9ce1ae`.
+The leakage-safe 8x128x128 view has the same 713 clips, zero cross-split exact-array
+duplicate groups, and manifest SHA-256
+`602540cfd15792c904caeec589bf3281877b79ad53817a54ac06fd70d15eb18e`.
+
+The 2,000+ JUS/Chibi archive is exact size 41,804,753,407 bytes and SHA-256
+`eb9983574ebc441f44d668693c402befde62aac6eaa604e615652b660e4a596a`.
+Selective extraction retains 3,142 DEF plus 2,332 AIR files (197,178,514 bytes),
+with no absolute/traversal path, duplicate, or case-collision finding. Explicit AIR
+recovery skips 24 malformed element rows across 17 files without guessing values;
+all 2,332 AIR files then parse. The DEF-to-AIR-to-archive-SFF join resolves 2,310
+fighter variants, of which 2,202 provide the complete six-slot core. Resolved
+variant coverage is idle 2,300, walk 2,277, jump 2,267, block 2,263, normal attack
+2,258, special attack 2,087, and super attack 1,814.
+
+The downloaded Anime Ascension file is exact size 98,894,887,513 bytes and SHA-256
+`d3aa7e4ba16e7983851850ae1bb6d01f09eeeb8d19b05e793f31697c9ae3d142`.
+It contains 27,158,350,425 trailing zero bytes. The losslessly trimmed meaningful
+extent is 71,736,537,088 bytes, SHA-256
+`0a16a93be8971843ea1822cffd95942364e2b9f6ce05a1dd921ce490f1a71294`;
+appending that exact zero count reconstructs the downloaded bytes and hash. The RAR
+has a pre-existing header error, so admission is fail-closed per member. Original
+and trimmed containers expose byte-identical 7,944-member metadata inventories,
+canonical inventory SHA-256
+`7b20ac9e6e963997ff7e010d4645d390361f9a21ee93e1dc5e8da0f48834c130`,
+and every selectively extracted member matches its declared size and CRC.
+
+The Anime Ascension metadata tree contains 4,365 DEF and 3,567 AIR files. All AIR
+files parse after evidence-retaining omission of 257 malformed rows across 41
+files. The DEF-to-AIR-to-SFF join resolves 3,456 fighter variants, including 3,275
+complete six-slot variants. Resolved coverage is idle 3,446, walk 3,408, jump
+3,393, block 3,387, normal attack 3,353, special attack 3,182, and super attack
+2,798. Combined with JUS/Chibi and Anime All Stars, the current pre-deduplication
+pool is 5,886 resolved variants and 5,596 complete six-slot variants. No CMD/CNS/ST
+or executable content is run. Large SFFs remain in their source archives and will
+be streamed one member at a time; unreadable members are quarantined individually.
+
+Rights and authorship remain evidence, not inference. Each archive URL, archive hash,
+member path, DEF author/name claim, AIR hash, SFF hash, action number, timing row, and
+derived pixel hash stays separately indexable. Unknown fan-asset rights are not
+converted into a permissive per-sprite claim.

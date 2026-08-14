@@ -8,7 +8,6 @@ animation layers.  It never imports or executes character logic.
 
 from __future__ import annotations
 
-import configparser
 import hashlib
 import io
 import re
@@ -40,10 +39,13 @@ _EXACT_ACTIONS: dict[int, tuple[str, str]] = {
     20: ("walk", "walking_forwards"),
     21: ("walk", "walking_backwards"),
     40: ("jump", "jump_start"),
-    41: ("jump", "jump_neutral"),
-    42: ("jump", "jump_forwards"),
-    43: ("jump", "jump_backwards"),
-    44: ("jump", "jump_land"),
+    41: ("jump", "jump_neutral_up"),
+    42: ("jump", "jump_forward_up"),
+    43: ("jump", "jump_backward_up"),
+    44: ("jump", "jump_neutral_down"),
+    45: ("jump", "jump_forward_down"),
+    46: ("jump", "jump_backward_down"),
+    47: ("jump", "jump_land"),
     100: ("run", "run_forwards"),
     105: ("jump", "hop_backwards"),
     120: ("block", "guard_start_standing"),
@@ -55,6 +57,9 @@ _EXACT_ACTIONS: dict[int, tuple[str, str]] = {
     140: ("block", "guard_end_standing"),
     141: ("block", "guard_end_crouching"),
     142: ("block", "guard_end_air"),
+    150: ("block", "guard_hit_standing"),
+    151: ("block", "guard_hit_crouching"),
+    152: ("block", "guard_hit_air"),
     170: ("hurt", "lose"),
     175: ("hurt", "time_over"),
     180: ("emote", "win"),
@@ -115,6 +120,7 @@ class MugenAirElement:
     horizontal_flip: bool
     vertical_flip: bool
     optional_tokens: tuple[str, ...]
+    optional_fields: tuple[str, ...]
     source_line: int
 
 
@@ -129,6 +135,17 @@ class MugenAirAction:
     collision_1_declarations: int
     collision_2_declarations: int
     source_comments: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MugenAirParseExclusion:
+    """One malformed AIR element omitted by explicit recovery mode."""
+
+    action_number: int
+    line_number: int
+    reason: str
+    raw_line: str
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -159,6 +176,17 @@ class MugenSffV1Sprite:
     indices_sha256: str
     palette_sha256: str
     rgba_sha256: str
+
+
+@dataclass(frozen=True)
+class MugenSffV1DecodeExclusion:
+    """One corrupt SFF v1 node skipped by explicit recovery mode."""
+
+    archive_index: int
+    group_number: int
+    image_number: int
+    reason: str
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -227,6 +255,8 @@ class MugenActionFrame:
     vertical_flip: bool
     rgba: bytes
     rgba_sha256: str
+    x_scale: float = 1.0
+    y_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -253,6 +283,7 @@ class MugenActionExclusion:
         "ambiguous_sprite_key",
         "non_integral_offset",
         "unsupported_air_transform",
+        "unsupported_air_timing",
     ]
     detail: str
     source_action_index: int = -1
@@ -284,7 +315,13 @@ def decode_mugen_text(payload: bytes) -> str:
 
 
 def parse_character_def(payload: bytes | str) -> MugenCharacterDefinition:
-    """Parse the conservative Info/Files subset of a character DEF."""
+    """Parse the conservative Info/Files subset of a character DEF.
+
+    Real collections commonly contain storyboard/AIR syntax or corrupt editor
+    tails in files bearing a DEF extension. The MUGEN runtime only needs the
+    key/value rows in ``[Info]`` and ``[Files]`` here, so unrelated malformed
+    lines are retained as inert evidence but do not invalidate those sections.
+    """
 
     text = decode_mugen_text(payload) if isinstance(payload, bytes) else payload
     comments = tuple(
@@ -292,27 +329,27 @@ def parse_character_def(payload: bytes | str) -> MugenCharacterDefinition:
         for line in text.splitlines()
         if (stripped := line.strip()).startswith(";") and stripped[1:].strip()
     )
-    parser = configparser.RawConfigParser(
-        interpolation=None,
-        strict=False,
-        delimiters=("=",),
-        comment_prefixes=(";",),
-        inline_comment_prefixes=(";",),
-    )
-    parser.optionxform = str.casefold
-    lines = text.splitlines()
-    first_section = next(
-        (index for index, line in enumerate(lines) if line.lstrip().startswith("[")), None
-    )
-    parse_lines = lines[first_section:] if first_section is not None else lines
-    parse_text = "\n".join(_strip_def_inline_comment(line) for line in parse_lines)
-    try:
-        parser.read_string(parse_text)
-    except configparser.Error as exc:
-        raise ValueError(f"invalid M.U.G.E.N DEF: {exc}") from exc
-
-    info = _section(parser, "info")
-    files = _section(parser, "files")
+    sections: dict[str, dict[str, str]] = {"info": {}, "files": {}}
+    current: str | None = None
+    for raw_line in text.splitlines():
+        line = _strip_def_inline_comment(raw_line).strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            if line.endswith("]"):
+                name = line[1:-1].strip().casefold()
+                current = name if name in sections else None
+            else:
+                current = None
+            continue
+        if current is None or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        normalized_key = key.strip().casefold()
+        if normalized_key:
+            sections[current][normalized_key] = value.strip()
+    info = sections["info"]
+    files = sections["files"]
     file_rows = tuple(sorted((key, _unquote(value.strip())) for key, value in files.items()))
     return MugenCharacterDefinition(
         name=_optional_value(info, "name"),
@@ -345,8 +382,16 @@ def parse_air(
     payload: bytes | str,
     *,
     reject_duplicate_actions: bool = True,
+    recover_invalid_elements: bool = False,
+    exclusions: list[MugenAirParseExclusion] | None = None,
 ) -> tuple[MugenAirAction, ...]:
-    """Parse ordered sprite references, timing, transforms, and loop points."""
+    """Parse ordered sprite references, timing, transforms, and loop points.
+
+    Strict parsing remains the default. Recovery mode only omits rows that
+    already look like sprite elements but contain invalid offset/duration
+    fields; every omission is retained verbatim in ``exclusions``. It never
+    guesses replacement coordinates or timing.
+    """
 
     text = decode_mugen_text(payload) if isinstance(payload, bytes) else payload
     actions: list[MugenAirAction] = []
@@ -425,12 +470,24 @@ def parse_air(
         if len(fields) < 5 or not all(_INTEGER.match(value) for value in fields[:2]):
             continue
         if not all(_FLOAT.match(value) for value in fields[2:4]) or not _INTEGER.match(fields[4]):
-            raise ValueError(f"invalid AIR element at line {line_number}: {raw_line!r}")
+            detail = f"invalid AIR element at line {line_number}: {raw_line!r}"
+            if not recover_invalid_elements:
+                raise ValueError(detail)
+            if exclusions is not None:
+                exclusions.append(
+                    MugenAirParseExclusion(
+                        action_number=number,
+                        line_number=line_number,
+                        reason="invalid_element_fields",
+                        raw_line=raw_line,
+                        detail=detail,
+                    )
+                )
+            continue
         duration = int(fields[4])
-        if duration < -1:
-            raise ValueError(f"invalid AIR duration at line {line_number}: {duration}")
-        optional = tuple(value for value in fields[5:] if value)
-        flags = optional[0].casefold() if optional else ""
+        optional_fields = fields[5:]
+        optional = tuple(value for value in optional_fields if value)
+        flags = optional_fields[0].casefold() if optional_fields else ""
         elements.append(
             MugenAirElement(
                 sprite_group=int(fields[0]),
@@ -438,10 +495,11 @@ def parse_air(
                 x_offset=float(fields[2]),
                 y_offset=float(fields[3]),
                 duration_ticks=duration,
-                duration_seconds=None if duration == -1 else duration / 60.0,
+                duration_seconds=None if duration < 0 else duration / 60.0,
                 horizontal_flip="h" in flags,
                 vertical_flip="v" in flags,
                 optional_tokens=optional,
+                optional_fields=optional_fields,
                 source_line=line_number,
             )
         )
@@ -494,6 +552,8 @@ def decode_sff_v1(
     payload: bytes,
     *,
     initial_palette_rgb: bytes | None = None,
+    recover_invalid_sprites: bool = False,
+    exclusions: list[MugenSffV1DecodeExclusion] | None = None,
 ) -> tuple[MugenSffV1Sprite, ...]:
     """Decode SFF v1 PCX sprites and links without invoking external tools.
 
@@ -514,7 +574,7 @@ def decode_sff_v1(
     if first_offset < 512 or first_offset >= len(payload):
         raise ValueError(f"invalid SFF v1 first subfile offset: {first_offset}")
 
-    sprites: list[MugenSffV1Sprite] = []
+    sprite_slots: list[MugenSffV1Sprite | None] = []
     offset = first_offset
     if initial_palette_rgb is not None and len(initial_palette_rgb) != 768:
         raise ValueError("initial SFF v1 palette must contain exactly 768 RGB bytes")
@@ -545,42 +605,68 @@ def decode_sff_v1(
             raise ValueError(f"SFF v1 sprite {archive_index} data is out of bounds")
 
         linked_index: int | None = None
+        failure: tuple[str, str] | None = None
         if data_bytes == 0:
             linked_index = link
-            if linked_index >= len(sprites):
-                raise ValueError(
-                    f"SFF v1 sprite {archive_index} links to unavailable index {linked_index}"
+            if linked_index >= len(sprite_slots) or sprite_slots[linked_index] is None:
+                failure = (
+                    "invalid_link",
+                    f"links to unavailable index {linked_index}",
                 )
-            source = sprites[linked_index]
-            width, height = source.width, source.height
-            indices, palette = source.indices, source.palette_rgb
+            else:
+                source = sprite_slots[linked_index]
+                assert source is not None
+                width, height = source.width, source.height
+                indices, palette = source.indices, source.palette_rgb
         else:
-            indices, palette, width, height = _decode_sff_v1_pcx(
-                payload[data_start:data_end],
-                previous_palette=previous_palette,
-                palette_reuse=bool(reuse) or (shared_palette and archive_index > 0),
+            pcx_payload = payload[data_start:data_end]
+            try:
+                indices, palette, width, height = _decode_sff_v1_pcx(
+                    pcx_payload,
+                    previous_palette=previous_palette,
+                    palette_reuse=bool(reuse) or (shared_palette and archive_index > 0),
+                )
+            except ValueError as error:
+                failure = ("invalid_pcx", str(error))
+                recovered_palette = _sff_v1_pcx_embedded_palette(pcx_payload)
+                if recovered_palette is not None:
+                    previous_palette = recovered_palette[1]
+        if failure is not None:
+            if not recover_invalid_sprites:
+                raise ValueError(f"SFF v1 sprite {archive_index} {failure[1]}")
+            if exclusions is not None:
+                exclusions.append(
+                    MugenSffV1DecodeExclusion(
+                        archive_index=archive_index,
+                        group_number=group,
+                        image_number=image,
+                        reason=failure[0],
+                        detail=failure[1],
+                    )
+                )
+            sprite_slots.append(None)
+        else:
+            previous_palette = palette
+            rgba = _indexed_rgba(indices, palette)
+            sprite_slots.append(
+                MugenSffV1Sprite(
+                    archive_index=archive_index,
+                    group_number=group,
+                    image_number=image,
+                    axis_x=axis_x,
+                    axis_y=axis_y,
+                    width=width,
+                    height=height,
+                    linked_sprite_index=linked_index,
+                    palette_reuse=bool(reuse),
+                    indices=indices,
+                    palette_rgb=palette,
+                    rgba=rgba,
+                    indices_sha256=hashlib.sha256(indices).hexdigest(),
+                    palette_sha256=hashlib.sha256(palette).hexdigest(),
+                    rgba_sha256=hashlib.sha256(rgba).hexdigest(),
+                )
             )
-        previous_palette = palette
-        rgba = _indexed_rgba(indices, palette)
-        sprites.append(
-            MugenSffV1Sprite(
-                archive_index=archive_index,
-                group_number=group,
-                image_number=image,
-                axis_x=axis_x,
-                axis_y=axis_y,
-                width=width,
-                height=height,
-                linked_sprite_index=linked_index,
-                palette_reuse=bool(reuse),
-                indices=indices,
-                palette_rgb=palette,
-                rgba=rgba,
-                indices_sha256=hashlib.sha256(indices).hexdigest(),
-                palette_sha256=hashlib.sha256(palette).hexdigest(),
-                rgba_sha256=hashlib.sha256(rgba).hexdigest(),
-            )
-        )
         if archive_index + 1 < image_total:
             if next_offset == 0:
                 raise ValueError(
@@ -589,7 +675,7 @@ def decode_sff_v1(
             offset = next_offset
         elif next_offset not in {0, len(payload)}:
             raise ValueError("SFF v1 final subfile does not terminate at zero or EOF")
-    return tuple(sprites)
+    return tuple(sprite for sprite in sprite_slots if sprite is not None)
 
 
 def decode_sff_v2(
@@ -882,8 +968,34 @@ def materialize_actions(
                 )
             )
             continue
+        unsupported_duration = next(
+            (element for element in action.elements if element.duration_ticks < -1), None
+        )
+        if unsupported_duration is not None:
+            excluded.append(
+                MugenActionExclusion(
+                    action.action_number,
+                    "unsupported_air_timing",
+                    (
+                        f"line {unsupported_duration.source_line}: unsupported negative "
+                        f"duration {unsupported_duration.duration_ticks}"
+                    ),
+                    source_action_index,
+                )
+            )
+            continue
         resolved: list[
-            tuple[MugenAirElement, MugenSffV1Sprite | MugenSffV2Sprite, int, int, bytes]
+            tuple[
+                MugenAirElement,
+                MugenSffV1Sprite | MugenSffV2Sprite,
+                int,
+                int,
+                bytes,
+                int,
+                int,
+                float,
+                float,
+            ]
         ] = []
         rejection: MugenActionExclusion | None = None
         for element in action.elements:
@@ -906,19 +1018,12 @@ def materialize_actions(
                     source_action_index,
                 )
                 break
-            if not element.x_offset.is_integer() or not element.y_offset.is_integer():
-                rejection = MugenActionExclusion(
-                    action.action_number,
-                    "non_integral_offset",
-                    f"line {element.source_line} has offset {element.x_offset},{element.y_offset}",
-                    source_action_index,
-                )
-                break
-            if len(element.optional_tokens) > 1:
+            transform_error, x_scale, y_scale = _element_spatial_transform(element)
+            if transform_error is not None:
                 rejection = MugenActionExclusion(
                     action.action_number,
                     "unsupported_air_transform",
-                    f"line {element.source_line} options {element.optional_tokens!r}",
+                    f"line {element.source_line}: {transform_error}",
                     source_action_index,
                 )
                 break
@@ -930,30 +1035,64 @@ def materialize_actions(
                 horizontal=element.horizontal_flip,
                 vertical=element.vertical_flip,
             )
+            transformed_width = sprite.width
+            transformed_height = sprite.height
             axis_x = sprite.width - 1 - sprite.axis_x if element.horizontal_flip else sprite.axis_x
             axis_y = sprite.height - 1 - sprite.axis_y if element.vertical_flip else sprite.axis_y
-            left = int(element.x_offset) - axis_x
-            top = int(element.y_offset) - axis_y
-            resolved.append((element, sprite, left, top, transformed))
+            if x_scale != 1.0 or y_scale != 1.0:
+                transformed, transformed_width, transformed_height = _scale_rgba_nearest(
+                    transformed,
+                    width=sprite.width,
+                    height=sprite.height,
+                    x_scale=x_scale,
+                    y_scale=y_scale,
+                )
+                axis_x = _scale_axis(axis_x, x_scale)
+                axis_y = _scale_axis(axis_y, y_scale)
+            left = _round_half_away_from_zero(element.x_offset * x_scale) - axis_x
+            top = _round_half_away_from_zero(element.y_offset * y_scale) - axis_y
+            resolved.append(
+                (
+                    element,
+                    sprite,
+                    left,
+                    top,
+                    transformed,
+                    transformed_width,
+                    transformed_height,
+                    x_scale,
+                    y_scale,
+                )
+            )
         if rejection is not None:
             excluded.append(rejection)
             continue
 
         world_left = min(row[2] for row in resolved)
         world_top = min(row[3] for row in resolved)
-        world_right = max(row[2] + row[1].width for row in resolved)
-        world_bottom = max(row[3] + row[1].height for row in resolved)
+        world_right = max(row[2] + row[5] for row in resolved)
+        world_bottom = max(row[3] + row[6] for row in resolved)
         canvas_width = world_right - world_left
         canvas_height = world_bottom - world_top
         frames: list[MugenActionFrame] = []
-        for ordinal, (element, sprite, left, top, transformed) in enumerate(resolved):
+        for ordinal, (
+            element,
+            sprite,
+            left,
+            top,
+            transformed,
+            transformed_width,
+            transformed_height,
+            x_scale,
+            y_scale,
+        ) in enumerate(resolved):
             canvas = bytearray(canvas_width * canvas_height * 4)
             _paste_rgba(
                 canvas,
                 canvas_width=canvas_width,
                 source=transformed,
-                source_width=sprite.width,
-                source_height=sprite.height,
+                source_width=transformed_width,
+                source_height=transformed_height,
                 left=left - world_left,
                 top=top - world_top,
             )
@@ -968,12 +1107,14 @@ def materialize_actions(
                     source_rgba_sha256=sprite.rgba_sha256,
                     world_left=left,
                     world_top=top,
-                    width=sprite.width,
-                    height=sprite.height,
+                    width=transformed_width,
+                    height=transformed_height,
                     horizontal_flip=element.horizontal_flip,
                     vertical_flip=element.vertical_flip,
                     rgba=rgba,
                     rgba_sha256=hashlib.sha256(rgba).hexdigest(),
+                    x_scale=x_scale,
+                    y_scale=y_scale,
                 )
             )
         admitted.append(
@@ -992,11 +1133,6 @@ def materialize_actions(
             )
         )
     return MugenActionPlan(tuple(admitted), tuple(excluded))
-
-
-def _section(parser: configparser.RawConfigParser, name: str) -> dict[str, str]:
-    section = next((section for section in parser.sections() if section.casefold() == name), None)
-    return {} if section is None else dict(parser.items(section, raw=True))
 
 
 def _optional_value(values: dict[str, str], key: str) -> str | None:
@@ -1109,7 +1245,12 @@ def _decode_sff_v2_pixels(
             indexed = _sff_v2_rle5(compressed, pixel_count)
         else:
             indexed = _sff_v2_lz5(compressed, pixel_count)
-        if declared not in {0, pixel_count}:
+        # Elecbyte-compatible files declare decompressed bytes (= pixels for
+        # indexed sprites). Fighter Factory has also emitted a widespread
+        # legacy bit-count prefix (= pixels * 8) while producing otherwise
+        # valid RLE8/RLE5/LZ5 streams. Accept only those exact conventions and
+        # still require the decoder to yield precisely width*height indices.
+        if declared not in {0, pixel_count, pixel_count * 8}:
             raise ValueError(
                 f"SFF v2 decompressed-size prefix {declared} differs from {pixel_count}"
             )
@@ -1285,12 +1426,8 @@ def _decode_sff_v1_pcx(
     if bits_per_pixel != 8 or planes != 1 or bytes_per_line < width:
         raise ValueError("SFF v1 PCX must be single-plane 8-bit indexed data with a valid stride")
 
-    palette_marker = -1
-    if not palette_reuse and len(payload) >= 897:
-        for candidate in range(len(payload) - 769, 127, -1):
-            if payload[candidate] == 0x0C:
-                palette_marker = candidate
-                break
+    embedded_palette = None if palette_reuse else _sff_v1_pcx_embedded_palette(payload)
+    palette_marker = embedded_palette[0] if embedded_palette is not None else -1
     raster_end = palette_marker if palette_marker >= 0 else len(payload)
     encoded = payload[128:raster_end]
     expected = bytes_per_line * height
@@ -1317,12 +1454,22 @@ def _decode_sff_v1_pcx(
     )
 
     if palette_marker >= 0:
-        palette = payload[palette_marker + 1 : palette_marker + 769]
+        assert embedded_palette is not None
+        palette = embedded_palette[1]
     elif palette_reuse and previous_palette is not None:
         palette = previous_palette
     else:
         raise ValueError("SFF v1 PCX omits its palette without a reusable predecessor")
     return indices, palette, width, height
+
+
+def _sff_v1_pcx_embedded_palette(payload: bytes) -> tuple[int, bytes] | None:
+    if len(payload) < 897:
+        return None
+    for marker in range(len(payload) - 769, 127, -1):
+        if payload[marker] == 0x0C and marker + 769 <= len(payload):
+            return marker, payload[marker + 1 : marker + 769]
+    return None
 
 
 def _indexed_rgba(indices: bytes, palette: bytes) -> bytes:
@@ -1358,6 +1505,62 @@ def _flip_rgba(
             destination = (y * width + x) * 4
             output[destination : destination + 4] = rgba[source : source + 4]
     return bytes(output)
+
+
+def _element_spatial_transform(element: MugenAirElement) -> tuple[str | None, float, float]:
+    """Validate the subset of MUGEN 1.1 AIR transforms baked into RGBA frames."""
+
+    fields = element.optional_fields
+    flip = fields[0].casefold() if fields else ""
+    if flip not in {"", "h", "v", "hv", "vh"}:
+        return f"unsupported flip token {fields[0]!r}", 1.0, 1.0
+    blend = fields[1] if len(fields) > 1 else ""
+    if blend:
+        return f"background-dependent blend token {blend!r}", 1.0, 1.0
+    try:
+        x_scale = float(fields[2]) if len(fields) > 2 and fields[2] else 1.0
+        y_scale = float(fields[3]) if len(fields) > 3 and fields[3] else 1.0
+        angle = float(fields[4]) if len(fields) > 4 and fields[4] else 0.0
+    except ValueError:
+        return f"non-numeric scale/angle fields {fields[2:5]!r}", 1.0, 1.0
+    if not np.isfinite(x_scale) or not np.isfinite(y_scale) or x_scale <= 0 or y_scale <= 0:
+        return f"invalid scale {x_scale},{y_scale}", 1.0, 1.0
+    if not np.isfinite(angle) or angle != 0.0:
+        return f"unsupported rotation angle {angle}", 1.0, 1.0
+    if any(fields[5:]):
+        return f"unsupported extra AIR fields {fields[5:]!r}", 1.0, 1.0
+    return None, x_scale, y_scale
+
+
+def _scale_rgba_nearest(
+    rgba: bytes,
+    *,
+    width: int,
+    height: int,
+    x_scale: float,
+    y_scale: float,
+) -> tuple[bytes, int, int]:
+    """Bake positive MUGEN 1.1 element scale with deterministic nearest sampling."""
+
+    if len(rgba) != width * height * 4:
+        raise ValueError("RGBA byte count does not match dimensions")
+    output_width = max(1, _round_half_away_from_zero(width * x_scale))
+    output_height = max(1, _round_half_away_from_zero(height * y_scale))
+    source = np.frombuffer(rgba, dtype=np.uint8).reshape(height, width, 4)
+    source_x = np.minimum((np.arange(output_width) / x_scale).astype(int), width - 1)
+    source_y = np.minimum((np.arange(output_height) / y_scale).astype(int), height - 1)
+    output = np.ascontiguousarray(source[source_y[:, None], source_x[None, :]])
+    return output.tobytes(), output_width, output_height
+
+
+def _scale_axis(axis: int, scale: float) -> int:
+    return _round_half_away_from_zero(axis * scale)
+
+
+def _round_half_away_from_zero(value: float) -> int:
+    if value >= 0:
+        return int(np.floor(value + 0.5))
+    return int(np.ceil(value - 0.5))
 
 
 def _paste_rgba(

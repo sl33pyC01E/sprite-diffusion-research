@@ -31,6 +31,7 @@ def main() -> int:
     parser.add_argument("--target-root", type=Path, default=Path("/home/sleepy/sprite-lab-mugen"))
     parser.add_argument("--min-free-gib", type=int, default=100)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--use-exact-remote-size", action="store_true")
     args = parser.parse_args()
     report_file = args.metadata_report.resolve()
     report_sha256 = _expect_hash(
@@ -40,7 +41,7 @@ def main() -> int:
     record = _select_record(report, args.section_ordinal)
     target_root = args.target_root.resolve()
     floor = args.min_free_gib * 1024**3
-    expected_size = _positive_int(record.get("declared_size_bytes"), "declared size")
+    indexed_size = _positive_int(record.get("declared_size_bytes"), "declared size")
     target_root.mkdir(parents=True, exist_ok=True)
 
     with httpx.Client(
@@ -49,11 +50,13 @@ def main() -> int:
         headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"},
     ) as client:
         resolved = _resolve_mediafire(client, _text(record, "url"))
-        if resolved["declared_size_bytes"] != expected_size:
+        exact_remote_size = _probe_exact_size(client, str(resolved["direct_download_url"]))
+        if resolved["declared_size_bytes"] != indexed_size and not args.use_exact_remote_size:
             raise RuntimeError(
                 "fresh MediaFire size differs from the indexed declaration: "
-                f"{resolved['declared_size_bytes']} != {expected_size}"
+                f"{resolved['declared_size_bytes']} != {indexed_size}"
             )
+        expected_size = exact_remote_size if args.use_exact_remote_size else indexed_size
         if resolved["filename"] != _text(record, "filename"):
             raise RuntimeError("fresh MediaFire filename differs from the indexed declaration")
         partial = (
@@ -68,6 +71,8 @@ def main() -> int:
         _require_capacity(target_root, needed, floor, "indexed MediaFire archive")
         preflight = {
             "declared_size_bytes": expected_size,
+            "indexed_declared_size_bytes": indexed_size,
+            "landing_rounded_size_bytes": resolved["declared_size_bytes"],
             "direct_download_url": resolved["direct_download_url"],
             "existing_partial_bytes": existing,
             "filename": resolved["filename"],
@@ -119,6 +124,7 @@ def main() -> int:
             "provider": {
                 "direct_download_url_at_retrieval": resolved["direct_download_url"],
                 "landing_html_sha256": resolved["landing_html_sha256"],
+                "landing_rounded_size_bytes": resolved["declared_size_bytes"],
                 "landing_url": record["url"],
                 "name": "MediaFire",
             },
@@ -132,6 +138,7 @@ def main() -> int:
             "source": {
                 "metadata_report_path": str(report_file),
                 "metadata_report_sha256": report_sha256,
+                "indexed_declared_size_bytes": indexed_size,
                 "section_source_ordinal": args.section_ordinal,
                 "section_title": record.get("section_title"),
             },
@@ -212,6 +219,21 @@ def _resolve_mediafire(client: httpx.Client, url: str) -> dict[str, object]:
         "filename": filename,
         "landing_html_sha256": hashlib.sha256(payload).hexdigest(),
     }
+
+
+def _probe_exact_size(client: httpx.Client, url: str) -> int:
+    with client.stream("GET", url, headers={"Range": "bytes=0-0"}) as response:
+        if response.status_code != 206:
+            raise RuntimeError(f"MediaFire range probe returned HTTP {response.status_code}")
+        match = CONTENT_RANGE.match(response.headers.get("content-range") or "")
+        if match is None:
+            raise RuntimeError("MediaFire range probe lacks valid Content-Range")
+        start, end, total = map(int, match.groups())
+        if (start, end) != (0, 0) or total <= 0:
+            raise RuntimeError("MediaFire range probe has invalid exact size")
+        if response.headers.get("content-length") != "1":
+            raise RuntimeError("MediaFire range probe has invalid Content-Length")
+        return total
 
 
 def _download(
