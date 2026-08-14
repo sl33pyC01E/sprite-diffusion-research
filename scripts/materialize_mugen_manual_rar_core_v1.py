@@ -47,6 +47,14 @@ def main() -> int:
     parser.add_argument("--worker-timeout-seconds", type=int, default=900)
     parser.add_argument("--worker-attempts", type=int, default=2)
     parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument(
+        "--finalize-partial",
+        action="store_true",
+        help=(
+            "Stop catalog traversal and publish only the already-journaled verified "
+            "records, retaining explicit processed/unprocessed counts"
+        ),
+    )
     args = parser.parse_args()
     if args.max_new_variants is not None and args.max_new_variants <= 0:
         raise ValueError("--max-new-variants must be positive")
@@ -76,6 +84,8 @@ def main() -> int:
     new_count = 0
     worker = ROOT / "scripts/materialize_mugen_manual_rar_variant_worker_v1.py"
     for position, record in enumerate(records, 1):
+        if args.finalize_partial:
+            break
         previous = statuses.get(record["variant_id"])
         if previous and not (args.retry_failed and previous["status"] == "failed"):
             continue
@@ -181,7 +191,7 @@ def main() -> int:
 
     failure_count = sum(row["status"] == "failed" for row in statuses.values())
     complete_run = len(statuses) == len(records) and failure_count == 0
-    if not complete_run:
+    if not complete_run and not args.finalize_partial:
         print(
             json.dumps(
                 {
@@ -198,6 +208,8 @@ def main() -> int:
             )
         )
         return 0
+    if args.finalize_partial and not statuses:
+        raise ValueError("cannot finalize a partial materialization without journaled statuses")
 
     materialized_ids = sorted(
         key for key, row in statuses.items() if row["status"] == "materialized"
@@ -226,8 +238,20 @@ def main() -> int:
             "duplicate_character_occurrences": sum(
                 row["status"] == "duplicate" for row in status_rows
             ),
+            "processed_catalog_variants": len(status_rows),
             "slots": dict(sorted(Counter(row["slot"] for row in clips).items())),
             "status": dict(sorted(Counter(row["status"] for row in status_rows).items())),
+            "unprocessed_catalog_variants": len(records) - len(status_rows),
+        },
+        "finalization": {
+            "catalog_complete": complete_run,
+            "policy": (
+                "complete_catalog"
+                if complete_run
+                else "user_directed_take_verified_journaled_records"
+            ),
+            "processed_catalog_variants": len(status_rows),
+            "unprocessed_catalog_variants": len(records) - len(status_rows),
         },
         "policy": {
             "geometry": (
