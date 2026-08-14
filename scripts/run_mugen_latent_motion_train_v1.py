@@ -20,7 +20,7 @@ from spritelab.latent_motion_train import (  # noqa: E402
 from spritelab.models.latent_motion_dit import LatentMotionDiTConfig  # noqa: E402
 from spritelab.storage import DiskGuard  # noqa: E402
 
-MANIFEST = ROOT / "data/processed/mugen-mffa-reference-primary-motion-canonical-v2.json"
+LEGACY_MANIFEST = ROOT / "data/processed/mugen-mffa-reference-primary-motion-canonical-v2.json"
 ENDPOINT_EMA = ROOT / "data/experiments/mugen-primary-motion-broad-v2-step15000/checkpoint-ema.pt"
 ENDPOINT_EMA_SHA256 = "7235e6cba9d891fff5cae7b564457c99db6fadfbf1d4e10a7fa4a4f3b0198027"
 LEGACY_ENDPOINT_MODEL = LatentMotionDiTConfig(
@@ -35,7 +35,13 @@ LEGACY_ENDPOINT_MODEL = LatentMotionDiTConfig(
 )
 
 
-def main(*, profile: str, preflight_only: bool) -> None:
+def main(
+    *,
+    profile: str,
+    preflight_only: bool,
+    manifest: Path = LEGACY_MANIFEST,
+    output: Path | None = None,
+) -> None:
     if profile == "smoke":
         config = LatentMotionTrainingConfig(
             gradient_accumulation=1,
@@ -115,13 +121,17 @@ def main(*, profile: str, preflight_only: bool) -> None:
         )
         output_name = "mugen-primary-motion-broad-flow-warmstart-v1-step8000"
         warm_start = True
+    elif profile == "corpus50000":
+        config = LatentMotionTrainingConfig()
+        output_name = "mugen-six-action-dense-latent-motion-scratch-v1-step50000"
+        warm_start = False
     else:
         raise ValueError(f"unsupported profile: {profile}")
     if profile in {"smoke", "pilot250"}:
         warm_start = False
-    corpus = load_latent_motion_training_corpus(MANIFEST, verify_hashes=True)
+    corpus = load_latent_motion_training_corpus(manifest, verify_hashes=True)
     matched = build_matched_action_index(corpus.rows, corpus.train_indices)
-    output = ROOT / "data/experiments" / output_name
+    output = output or ROOT / "data/experiments" / output_name
     preflight = {
         "action_vocabulary": list(corpus.action_vocabulary),
         "config": asdict(config),
@@ -137,7 +147,7 @@ def main(*, profile: str, preflight_only: bool) -> None:
         print(json.dumps(preflight, sort_keys=True))
         return
     result = run_latent_motion_training(
-        MANIFEST,
+        manifest,
         output,
         config=config,
         warm_start_checkpoint_path=ENDPOINT_EMA if warm_start else None,
@@ -161,9 +171,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--profile",
-        choices=("smoke", "pilot250", "baseline15000", "flow-smoke", "flow8000"),
+        choices=(
+            "smoke",
+            "pilot250",
+            "baseline15000",
+            "flow-smoke",
+            "flow8000",
+            "corpus50000",
+        ),
         default="smoke",
     )
+    parser.add_argument("--manifest", type=Path, default=LEGACY_MANIFEST)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
-    main(profile=args.profile, preflight_only=args.preflight_only)
+    main(
+        profile=args.profile,
+        preflight_only=args.preflight_only,
+        manifest=args.manifest,
+        output=args.output,
+    )

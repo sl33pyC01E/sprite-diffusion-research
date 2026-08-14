@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,28 +13,86 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from spritelab.latent_still_train import (  # noqa: E402
     LatentStillTrainingConfig,
+    load_latent_still_corpus,
     run_latent_still_training,
 )
 from spritelab.storage import DiskGuard  # noqa: E402
 
-PLAN = ROOT / "data/processed/mugen-mffa-latent-still-sequence-plan-v1.json"
-LATENTS = ROOT / "data/processed/mugen-mffa-rgba-latents-2x-v1/manifest.json"
-TEXT = ROOT / "data/processed/mugen-mffa-sd14-clip-token-states-v1/manifest.json"
-OUTPUT = ROOT / "data/experiments/mugen-mffa-latent-still-dit-scratch-v1-30000"
+LEGACY_PLAN = ROOT / "data/processed/mugen-mffa-latent-still-sequence-plan-v1.json"
+LEGACY_LATENTS = ROOT / "data/processed/mugen-mffa-rgba-latents-2x-v1/manifest.json"
+LEGACY_TEXT = ROOT / "data/processed/mugen-mffa-sd14-clip-token-states-v1/manifest.json"
+LEGACY_OUTPUT = ROOT / "data/experiments/mugen-mffa-latent-still-dit-scratch-v1-30000"
+CORPUS_OUTPUT = ROOT / "data/experiments/mugen-six-action-still-dit-scratch-v1-step50000"
+SMOKE_OUTPUT = ROOT / "data/experiments/mugen-latent-still-dit-gpu-smoke-v1-step1"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--plan", type=Path, default=LEGACY_PLAN)
+    parser.add_argument("--latents", type=Path, default=LEGACY_LATENTS)
+    parser.add_argument("--text", type=Path, default=LEGACY_TEXT)
+    parser.add_argument(
+        "--profile", choices=("legacy30000", "corpus50000", "smoke"), default="legacy30000"
+    )
+    parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--resume-checkpoint", type=Path)
     parser.add_argument("--expected-resume-sha256")
-    parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if (args.resume_checkpoint is None) != (args.expected_resume_sha256 is None):
+        raise ValueError("resume checkpoint and expected SHA-256 must be provided together")
+    if args.profile == "legacy30000":
+        config = LatentStillTrainingConfig()
+    elif args.profile == "corpus50000":
+        config = LatentStillTrainingConfig(steps=50_000)
+    else:
+        config = LatentStillTrainingConfig(
+            batch_size=1,
+            gradient_accumulation=1,
+            warmup_steps=0,
+            steps=1,
+            log_every=1,
+            validate_every=1,
+            checkpoint_every=1,
+            validation_rows=1,
+        )
+    default_outputs = {
+        "corpus50000": CORPUS_OUTPUT,
+        "legacy30000": LEGACY_OUTPUT,
+        "smoke": SMOKE_OUTPUT,
+    }
+    output = args.output or default_outputs[args.profile]
+    if args.preflight_only:
+        corpus = load_latent_still_corpus(
+            args.plan, args.latents, args.text, verify_latent_files=True
+        )
+        print(
+            json.dumps(
+                {
+                    "config": asdict(config),
+                    "corpus": corpus.contract,
+                    "output": str(output.resolve()),
+                    "resume": (
+                        {
+                            "checkpoint": str(args.resume_checkpoint.resolve()),
+                            "sha256": args.expected_resume_sha256,
+                        }
+                        if args.resume_checkpoint is not None
+                        else None
+                    ),
+                    "train_rows": len(corpus.train_indices),
+                    "validation_rows": len(corpus.validation_indices),
+                },
+                sort_keys=True,
+            )
+        )
+        return
     result = run_latent_still_training(
-        PLAN,
-        LATENTS,
-        TEXT,
-        args.output,
-        config=LatentStillTrainingConfig(),
+        args.plan,
+        args.latents,
+        args.text,
+        output,
+        config=config,
         resume_checkpoint_path=args.resume_checkpoint,
         expected_resume_sha256=args.expected_resume_sha256,
         disk_guard=DiskGuard(ROOT, min_free_bytes=100 * 1024**3),
