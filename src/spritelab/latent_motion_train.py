@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
+from PIL import Image
 
+from spritelab.evaluation import compare_matched_sequences
 from spritelab.models.latent_motion_dit import (
     LatentMotionDiTConfig,
     ReferenceConditionedLatentMotionDiT,
@@ -1496,8 +1498,17 @@ def _export_validation_previews(
             for offset, row_index in enumerate(pair):
                 row = corpus.rows[row_index]
                 replacement = corpus.rows[pair[1 - offset]]
+                target_array = corpus.target_rgba[row_index]
+                generated_array = arrays[offset]
+                counterfactual_array = counterfactual_arrays[offset]
+                matched_metrics = compare_matched_sequences(
+                    [Image.fromarray(frame) for frame in generated_array],
+                    [Image.fromarray(frame) for frame in target_array],
+                    loop_mode=row.loop_mode,
+                    alpha_threshold=127,
+                )
                 target_preview = export_rgba_clip_preview(
-                    corpus.target_rgba[row_index],
+                    target_array,
                     output,
                     artifact_stem=f"{pair_index:02d}-{offset}-{row.identity_id[-8:]}-{row.verb}-target",
                     duration_ms=row.duration_ms,
@@ -1507,7 +1518,7 @@ def _export_validation_previews(
                     disk_guard=disk_guard,
                 )
                 generated_preview = export_rgba_clip_preview(
-                    arrays[offset],
+                    generated_array,
                     output,
                     artifact_stem=f"{pair_index:02d}-{offset}-{row.identity_id[-8:]}-{row.verb}-generated",
                     duration_ms=row.duration_ms,
@@ -1517,7 +1528,7 @@ def _export_validation_previews(
                     disk_guard=disk_guard,
                 )
                 counterfactual_preview = export_rgba_clip_preview(
-                    counterfactual_arrays[offset],
+                    counterfactual_array,
                     output,
                     artifact_stem=(
                         f"{pair_index:02d}-{offset}-{row.identity_id[-8:]}-{row.verb}-"
@@ -1553,7 +1564,11 @@ def _export_validation_previews(
                         ),
                         "generated_sheet_sha256": generated_preview.contact_sheet_sha256,
                         "identity_id": row.identity_id,
+                        "matched_metrics": asdict(matched_metrics),
                         "sequence_id": row.sequence_id,
+                        "target_array_content_sha256": _array_sha256(target_array),
+                        "generated_array_content_sha256": _array_sha256(generated_array),
+                        "counterfactual_array_content_sha256": _array_sha256(counterfactual_array),
                         "target_animated_path": _preview_relative_path(
                             target_preview.animated_png_path, output
                         ),
