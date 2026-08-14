@@ -88,7 +88,6 @@ def export_clip_text_token_cache(
         CLIPTextModel.from_pretrained(
             model_root / "text_encoder",
             local_files_only=True,
-            use_safetensors=True,
         )
         .to(device)
         .eval()

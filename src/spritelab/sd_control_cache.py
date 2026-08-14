@@ -101,11 +101,7 @@ def export_sd14_rgb_latent_cache(
     journal_path = output / "records.jsonl"
     completed = _load_journal(journal_path, output)
     model = (
-        AutoencoderKL.from_pretrained(
-            model_root / "vae", local_files_only=True, use_safetensors=True
-        )
-        .to(device)
-        .eval()
+        AutoencoderKL.from_pretrained(model_root / "vae", local_files_only=True).to(device).eval()
     )
     model.requires_grad_(False)
     scaling_factor = float(model.config.scaling_factor)

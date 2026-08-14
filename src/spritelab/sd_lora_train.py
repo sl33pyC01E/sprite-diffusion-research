@@ -304,9 +304,9 @@ def run_sd14_lora_training(
     output.mkdir(parents=True, exist_ok=False)
     torch.manual_seed(experiment.seed)
     torch.cuda.manual_seed_all(experiment.seed) if device.type == "cuda" else None
-    unet = UNet2DConditionModel.from_pretrained(
-        model_root / "unet", local_files_only=True, use_safetensors=True
-    ).to(device)
+    unet = UNet2DConditionModel.from_pretrained(model_root / "unet", local_files_only=True).to(
+        device
+    )
     unet.requires_grad_(False)
     unet.enable_gradient_checkpointing()
     adapter_name = "mugen"

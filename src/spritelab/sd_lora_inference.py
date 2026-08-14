@@ -99,9 +99,7 @@ def run_sd14_lora_inference(
     if experiment.precision == "bfloat16" and device.type != "cuda":
         raise ValueError("bfloat16 inference requires CUDA")
     unet = (
-        UNet2DConditionModel.from_pretrained(
-            model_root / "unet", local_files_only=True, use_safetensors=True
-        )
+        UNet2DConditionModel.from_pretrained(model_root / "unet", local_files_only=True)
         .to(device)
         .eval()
     )
@@ -131,9 +129,7 @@ def run_sd14_lora_inference(
     if overlong:
         raise SDLoraInferenceError(f"prompt exceeds 77 CLIP tokens: {overlong[0]!r}")
     text_encoder = (
-        CLIPTextModel.from_pretrained(
-            model_root / "text_encoder", local_files_only=True, use_safetensors=True
-        )
+        CLIPTextModel.from_pretrained(model_root / "text_encoder", local_files_only=True)
         .to(device)
         .eval()
     )
@@ -180,13 +176,7 @@ def run_sd14_lora_inference(
                 conditioned_prediction - unconditioned_prediction
             )
             latent = scheduler.step(guided, timestep, latent).prev_sample
-    vae = (
-        AutoencoderKL.from_pretrained(
-            model_root / "vae", local_files_only=True, use_safetensors=True
-        )
-        .to(device)
-        .eval()
-    )
+    vae = AutoencoderKL.from_pretrained(model_root / "vae", local_files_only=True).to(device).eval()
     with (
         torch.no_grad(),
         torch.autocast(
