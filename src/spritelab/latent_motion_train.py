@@ -8,6 +8,7 @@ import io
 import json
 import math
 import os
+import shutil
 import tempfile
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -158,6 +159,13 @@ class LatentMotionTrainingResult:
     report_path: Path
     training_checkpoint_path: Path
     inference_checkpoint_path: Path
+    report_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class LatentMotionEvaluationResult:
+    output_directory: Path
+    report_path: Path
     report_sha256: str
 
 
@@ -453,6 +461,140 @@ def run_latent_motion_training(
         )
 
 
+def evaluate_latent_motion_checkpoint(
+    manifest_path: Path | str,
+    checkpoint_path: Path | str,
+    output_directory: Path | str,
+    *,
+    expected_checkpoint_sha256: str,
+    maximum_test_pairs: int = 28,
+    preview_pairs: int = 6,
+    seed: int = 20260826,
+    device: str = "cuda",
+    disk_guard: DiskGuard | None = None,
+) -> LatentMotionEvaluationResult:
+    """Safe-load and evaluate one EMA checkpoint on untouched test identities."""
+
+    runtime = _require_torch()
+    for name, value in (
+        ("maximum_test_pairs", maximum_test_pairs),
+        ("preview_pairs", preview_pairs),
+        ("seed", seed),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    if device not in {"cpu", "cuda"}:
+        raise ValueError("device must be cpu or cuda")
+    output = Path(output_directory).resolve()
+    if output.exists():
+        raise FileExistsError(f"Refusing to replace latent-motion evaluation: {output}")
+    checkpoint_file = Path(checkpoint_path).resolve()
+    actual_sha256 = _file_sha256(checkpoint_file)
+    if actual_sha256 != expected_checkpoint_sha256:
+        raise LatentMotionTrainingError("inference checkpoint SHA-256 mismatch")
+    try:
+        checkpoint = runtime.load(checkpoint_file, map_location="cpu", weights_only=True)
+    except Exception as error:
+        raise LatentMotionTrainingError("inference checkpoint failed safe load") from error
+    if not isinstance(checkpoint, dict) or checkpoint.get("artifact_kind") != (
+        "mugen_reference_latent_motion_ema_inference_checkpoint"
+    ):
+        raise LatentMotionTrainingError("inference checkpoint has the wrong artifact kind")
+    corpus = load_latent_motion_training_corpus(manifest_path, verify_hashes=True)
+    if checkpoint.get("corpus") != corpus.contract:
+        raise LatentMotionTrainingError("inference checkpoint corpus differs")
+    if checkpoint.get("action_vocabulary") != list(corpus.action_vocabulary):
+        raise LatentMotionTrainingError("inference checkpoint action vocabulary differs")
+    checkpoint_config = _config_from_dict(checkpoint.get("config"))
+    runtime_device = runtime.device(device)
+    if runtime_device.type == "cuda" and not runtime.cuda.is_available():
+        raise RuntimeError("CUDA was requested but is unavailable")
+    model = _ActionConditionedMotionModel(
+        checkpoint_config.model, len(corpus.action_vocabulary)
+    ).to(runtime_device)
+    try:
+        model.load_state_dict(checkpoint["ema_model"], strict=True)
+    except (KeyError, RuntimeError) as error:
+        raise LatentMotionTrainingError("inference checkpoint model state differs") from error
+    model.eval()
+    decoder = _load_frozen_decoder(runtime, corpus, device=runtime_device)
+    selection = _matched_pairs(corpus, corpus.test_indices, maximum_test_pairs)
+    mean = runtime.tensor(corpus.channel_mean, device=runtime_device).view(1, 1, 8, 1, 1)
+    std = runtime.tensor(corpus.channel_standard_deviation, device=runtime_device).view(
+        1, 1, 8, 1, 1
+    )
+    dtype = runtime.bfloat16 if runtime_device.type == "cuda" else runtime.float32
+    autocast = runtime_device.type == "cuda"
+    metrics = _validate(
+        runtime,
+        corpus,
+        selection,
+        model,
+        decoder,
+        device=runtime_device,
+        dtype=dtype,
+        autocast=autocast,
+        mean=mean,
+        std=std,
+        seed=seed,
+    )
+    guard = disk_guard or DiskGuard(output.parent, min_free_bytes=100 * 1024**3)
+    guard.require_capacity(512 * 1024**2, label="latent-motion test evaluation")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=output.parent))
+    try:
+        previews = _export_validation_previews(
+            runtime,
+            corpus,
+            selection[:preview_pairs],
+            model,
+            decoder,
+            output=stage / "previews",
+            device=runtime_device,
+            dtype=dtype,
+            autocast=autocast,
+            mean=mean,
+            std=std,
+            seed=seed,
+            disk_guard=guard,
+        )
+        report = {
+            "artifact_kind": "mugen_reference_latent_motion_test_evaluation",
+            "checkpoint": {
+                "file_sha256": actual_sha256,
+                "step": checkpoint.get("step"),
+            },
+            "claim": "untouched identity-disjoint test pairs; no open-domain generalization claim",
+            "corpus": corpus.contract,
+            "metrics": metrics,
+            "pairs": [
+                {
+                    "identity_id": corpus.rows[left].identity_id,
+                    "left_sequence_id": corpus.rows[left].sequence_id,
+                    "left_verb": corpus.rows[left].verb,
+                    "right_sequence_id": corpus.rows[right].sequence_id,
+                    "right_verb": corpus.rows[right].verb,
+                }
+                for left, right in selection
+            ],
+            "previews": previews,
+            "runtime": _runtime_facts(runtime, runtime_device),
+            "schema_version": 1,
+            "seed": seed,
+        }
+        payload = canonical_json_bytes(report)
+        (stage / "evaluation-report.json").write_bytes(payload)
+        os.rename(stage, output)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    return LatentMotionEvaluationResult(
+        output_directory=output,
+        report_path=output / "evaluation-report.json",
+        report_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+
 def _train(
     runtime: Any,
     *,
@@ -565,7 +707,12 @@ def _train(
             .cpu()
         )
         optimizer.step()
-        _ema_update(runtime, ema, model, config.ema_decay)
+        _ema_update(
+            runtime,
+            ema,
+            model,
+            0.0 if step <= config.warmup_steps else config.ema_decay,
+        )
         if step == 1 or step % config.validate_every == 0 or step == config.steps:
             latest_validation = _validate(
                 runtime,
@@ -620,6 +767,7 @@ def _train(
             "artifact_kind": "mugen_reference_latent_motion_ema_inference_checkpoint",
             "config": asdict(config),
             "corpus": corpus.contract,
+            "ema_policy": _ema_policy(config),
             "ema_model": ema.state_dict(),
             "normalization": {
                 "channel_mean": list(corpus.channel_mean),
@@ -649,6 +797,7 @@ def _train(
         "claim": "held-out-identity validation of canonical reference plus action-token motion",
         "config": asdict(config),
         "corpus": corpus.contract,
+        "ema_policy": _ema_policy(config),
         "final_validation": latest_validation,
         "history": {
             "file_sha256": _file_sha256(output / "training-history.jsonl"),
@@ -708,7 +857,15 @@ def _batch(
 def _validation_pairs(
     corpus: LatentMotionTrainingCorpus, maximum_pairs: int
 ) -> tuple[tuple[int, int], ...]:
-    index = build_matched_action_index(corpus.rows, corpus.validation_indices)
+    return _matched_pairs(corpus, corpus.validation_indices, maximum_pairs)
+
+
+def _matched_pairs(
+    corpus: LatentMotionTrainingCorpus,
+    indices: tuple[int, ...],
+    maximum_pairs: int,
+) -> tuple[tuple[int, int], ...]:
+    index = build_matched_action_index(corpus.rows, indices)
     output = []
     for identity in sorted(index, key=str.encode):
         verbs = tuple(index[identity])
@@ -716,7 +873,7 @@ def _validation_pairs(
         if len(output) == maximum_pairs:
             break
     if not output:
-        raise LatentMotionTrainingError("validation has no matched action pairs")
+        raise LatentMotionTrainingError("split has no matched action pairs")
     return tuple(output)
 
 
@@ -910,6 +1067,7 @@ def _write_training_checkpoint(
             "artifact_kind": "mugen_reference_latent_motion_resume_checkpoint",
             "config": asdict(config),
             "corpus": corpus.contract,
+            "ema_policy": _ema_policy(config),
             "ema_model": ema.state_dict(),
             "optimizer": optimizer.state_dict(),
             "raw_model": model.state_dict(),
@@ -1009,8 +1167,30 @@ def _ema_update(runtime: Any, ema: Any, model: Any, decay: float) -> None:
             target.copy_(source)
 
 
+def _ema_policy(config: LatentMotionTrainingConfig) -> dict[str, Any]:
+    return {
+        "decay_after_warmup": config.ema_decay,
+        "policy": "copy_raw_through_learning_rate_warmup_then_fixed_decay",
+        "warmup_steps": config.warmup_steps,
+    }
+
+
 def _record_verb(record: dict[str, Any]) -> str:
     return _required_text(_required_dict(record, "conditioning"), "verb")
+
+
+def _config_from_dict(value: Any) -> LatentMotionTrainingConfig:
+    if not isinstance(value, dict):
+        raise LatentMotionTrainingError("checkpoint config is missing")
+    fields = dict(value)
+    model = fields.get("model")
+    if not isinstance(model, dict):
+        raise LatentMotionTrainingError("checkpoint model config is missing")
+    try:
+        fields["model"] = LatentMotionDiTConfig(**model)
+        return LatentMotionTrainingConfig(**fields)
+    except (TypeError, ValueError) as error:
+        raise LatentMotionTrainingError("checkpoint config is invalid") from error
 
 
 def _counted_records(artifact: dict[str, Any], label: str) -> list[dict[str, Any]]:

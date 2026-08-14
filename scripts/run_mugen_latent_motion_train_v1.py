@@ -47,7 +47,7 @@ def main(*, profile: str, preflight_only: bool) -> None:
         output_name = "mugen-primary-motion-broad-pilot-v1-step250"
     elif profile == "baseline15000":
         config = LatentMotionTrainingConfig()
-        output_name = "mugen-primary-motion-broad-v1-step15000"
+        output_name = "mugen-primary-motion-broad-v2-step15000"
     else:
         raise ValueError(f"unsupported profile: {profile}")
     corpus = load_latent_motion_training_corpus(MANIFEST, verify_hashes=True)

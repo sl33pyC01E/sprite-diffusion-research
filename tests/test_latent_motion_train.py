@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import pytest
 
 from spritelab.latent_motion_train import (
     LatentMotionTrainingConfig,
     LatentMotionTrainingRow,
+    _config_from_dict,
+    _ema_update,
     build_matched_action_index,
     sample_matched_action_pair,
 )
@@ -48,3 +52,27 @@ def test_matched_sampler_returns_same_identity_distinct_actions() -> None:
 def test_config_requires_an_endpoint_objective() -> None:
     with pytest.raises(ValueError, match="at least one endpoint objective"):
         LatentMotionTrainingConfig(latent_endpoint_weight=0, pixel_endpoint_weight=0)
+
+
+def test_checkpoint_config_round_trips_nested_model() -> None:
+    config = LatentMotionTrainingConfig()
+
+    reconstructed = _config_from_dict(asdict(config))
+
+    assert reconstructed == config
+
+
+def test_zero_decay_ema_copies_raw_weights_during_warmup() -> None:
+    torch = pytest.importorskip("torch")
+    raw = torch.nn.Linear(2, 2)
+    ema = torch.nn.Linear(2, 2)
+    with torch.no_grad():
+        raw.weight.fill_(2)
+        raw.bias.fill_(3)
+        ema.weight.zero_()
+        ema.bias.zero_()
+
+    _ema_update(torch, ema, raw, 0.0)
+
+    assert torch.equal(ema.weight, raw.weight)
+    assert torch.equal(ema.bias, raw.bias)
