@@ -82,9 +82,8 @@ def build_mugen_dense_autoencoder_materialization(
                 raise ValueError(f"array content hash differs: {sequence_id}")
             temporal = _object(action.get("temporal_selection"), "temporal selection")
             phases = temporal.get("target_phases")
-            if phases != [index / 8 for index in range(8)]:
-                raise ValueError(f"target phases differ: {sequence_id}")
             loop_mode = _text(action, "loop_mode")
+            _validate_phases(phases, loop_mode=loop_mode, sequence_id=sequence_id)
             sequences.append(
                 {
                     "action": _text(action, "slot"),
@@ -333,6 +332,27 @@ def _source_root(row: dict[str, Any], manifest_root: Path) -> Path:
     if manifest_root != root and manifest_root not in root.parents:
         raise ValueError("source materialization root is outside manifest_root")
     return root
+
+
+def _validate_phases(value: Any, *, loop_mode: str, sequence_id: str) -> None:
+    if loop_mode not in {"loop", "one_shot", "ping_pong"}:
+        raise ValueError(f"unsupported loop mode: {sequence_id}: {loop_mode}")
+    if (
+        not isinstance(value, list)
+        or len(value) != 8
+        or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value)
+    ):
+        raise ValueError(f"target phases differ: {sequence_id}")
+    phases = [float(item) for item in value]
+    upper = 1.0 if loop_mode == "one_shot" else 1.0 - 1e-12
+    if (
+        phases != sorted(phases)
+        or phases[0] != 0.0
+        or any(item < 0.0 or item > upper for item in phases)
+    ):
+        raise ValueError(f"target phases differ: {sequence_id}")
+    if loop_mode == "one_shot" and phases[-1] != 1.0:
+        raise ValueError(f"one-shot target phases do not reach one: {sequence_id}")
 
 
 def _safe_relative(value: str) -> PurePosixPath:

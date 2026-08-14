@@ -100,6 +100,22 @@ def test_dense_bridge_is_no_clobber(tmp_path: Path) -> None:
         export_mugen_dense_autoencoder_materialization(dense, output, disk_guard=guard)
 
 
+def test_dense_bridge_preserves_one_shot_phases(tmp_path: Path) -> None:
+    dense = _fixture(tmp_path)
+    value = json.loads(dense.read_text(encoding="utf-8"))
+    action = value["records"][0]["actions"][0]
+    action["loop_mode"] = "one_shot"
+    action["temporal_selection"]["target_phases"] = [index / 7 for index in range(8)]
+    dense.write_text(json.dumps(value), encoding="utf-8")
+    output = tmp_path / "bridge.json"
+
+    export_mugen_dense_autoencoder_materialization(dense, output, disk_guard=DiskGuard(tmp_path, 0))
+    clips = load_materialized_training_clips(output, split="train")
+
+    assert clips[0].source_loop_mode == "one_shot"
+    assert clips[0].frame_phases[-1] == 1.0
+
+
 def test_captioned_dense_bridge_enables_conditional_loading(tmp_path: Path) -> None:
     dense = _fixture(tmp_path)
     dense_value = json.loads(dense.read_text(encoding="utf-8"))

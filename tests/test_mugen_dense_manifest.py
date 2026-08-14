@@ -65,7 +65,10 @@ def _root(
                 "schema_verb": slot,
                 "slot": slot,
                 "source_action_index": index,
-                "temporal_selection": {"source_frame_count": 2},
+                "temporal_selection": {
+                    "source_frame_count": 2,
+                    "target_phases": [frame / 8 for frame in range(8)],
+                },
             }
         )
     character = {

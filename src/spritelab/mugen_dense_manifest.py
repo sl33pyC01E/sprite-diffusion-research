@@ -133,6 +133,9 @@ def build_mugen_dense_manifest(
                             "source_frame_count"
                         ]
                     ),
+                    "temporal_selection": _object(
+                        clip.get("temporal_selection"), "temporal selection"
+                    ),
                 }
             )
             slot_counts[slot] += 1
