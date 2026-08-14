@@ -632,3 +632,11 @@ per-image captions, bf16, cached VAE latents, gradient checkpointing, 8-bit Adam
 and no checkpoint retention limit.  Zero-shot held-out prompts run first.  A LoRA
 run is accepted only if it improves the fixed validation identities under matched
 seeds without merely copying the gray canvas or collapsing distinct captions.
+
+The base-model acquisition is pinned to `Qwen/Qwen-Image` commit
+`75e0b4be04f60ec59a75f475837eced720f823b6` (57,704,594,653 bytes,
+Apache-2.0 metadata).  The Spark downloader verifies the immutable revision and
+provider file sizes before any transfer, enforces the 100-GiB free-space floor,
+resumes through the Hugging Face local cache, verifies every LFS SHA-256, retains
+partials after interruption, and publishes a no-clobber exact-file manifest only
+after the whole snapshot verifies.
