@@ -653,7 +653,7 @@ optimizer and records that policy in both checkpoint and report.
 Endpoint-only training remains a historical in-sample reconstruction diagnostic,
 not the active corpus model. The active default samples uniform flow time with 25%
 explicit endpoint exposure and evaluates a 16-step Heun trajectory. Its
-reference-conditioned model uses 384-wide tokens, 12 blocks, 6 heads, and 2x2 latent
+reference-conditioned model uses 384-wide tokens, 12 blocks, 6 heads, and 4x4 latent
 patches. Both exact training-member probes and identity-held-out probes must report
 the sampling regime and use fixed matched noise; loss improvement alone is not an
 adequate result. The corpus trainer therefore publishes two separate final metric
