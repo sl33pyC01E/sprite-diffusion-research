@@ -55,20 +55,10 @@ def main() -> None:
         or any(not isinstance(record, dict) for record in records)
     ):
         raise ValueError("still plan records are invalid")
-    selected = []
-    for split in ("train", "validation", "test"):
-        candidates = [record for record in records if record.get("split") == split]
-        candidates.sort(
-            key=lambda record: hashlib.sha256(
-                (str(record.get("identity_id")) + "\0" + str(record.get("prompt"))).encode()
-            ).digest()
-        )
-        selected.extend(candidates[: args.per_split])
+    selected = _select_unique_prompt_records(records, per_split=args.per_split)
     if not selected:
         raise ValueError("still plan has no supported split records")
     prompts = [str(record["prompt"]) for record in selected]
-    if len(set(prompts)) != len(prompts):
-        raise ValueError("selected still prompts are not unique")
     report_path, report_sha256 = run_latent_still_inference(
         args.checkpoint,
         args.codec_checkpoint,
@@ -161,6 +151,39 @@ def _file_sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _select_unique_prompt_records(
+    records: list[dict[str, object]], *, per_split: int
+) -> list[dict[str, object]]:
+    """Select deterministic split probes without failing on caption aliases."""
+
+    if isinstance(per_split, bool) or not isinstance(per_split, int) or per_split <= 0:
+        raise ValueError("per_split must be positive")
+    selected: list[dict[str, object]] = []
+    seen_prompts: set[str] = set()
+    for split in ("train", "validation", "test"):
+        candidates = [record for record in records if record.get("split") == split]
+        candidates.sort(
+            key=lambda record: hashlib.sha256(
+                (str(record.get("identity_id")) + "\0" + str(record.get("prompt"))).encode()
+            ).digest()
+        )
+        split_selected = []
+        for record in candidates:
+            prompt = record.get("prompt")
+            if not isinstance(prompt, str) or not prompt:
+                raise ValueError("still evaluation record prompt is invalid")
+            if prompt in seen_prompts:
+                continue
+            split_selected.append(record)
+            seen_prompts.add(prompt)
+            if len(split_selected) == per_split:
+                break
+        if len(split_selected) != per_split:
+            raise ValueError(f"still plan lacks {per_split} unique prompts in split {split!r}")
+        selected.extend(split_selected)
+    return selected
 
 
 def _export_target_preview(

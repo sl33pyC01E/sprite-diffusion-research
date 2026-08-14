@@ -13,6 +13,7 @@ from scripts.evaluate_mugen_latent_still_v1 import (
     _export_target_preview,
     _load_generated_frame,
     _matched_metrics,
+    _select_unique_prompt_records,
 )
 
 
@@ -107,3 +108,16 @@ def test_generated_frame_and_matched_metrics_are_hash_bound(tmp_path) -> None:
     sample["array"]["file_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="file SHA-256"):
         _load_generated_frame(sample, tmp_path)
+
+
+def test_split_selection_skips_duplicate_caption_aliases() -> None:
+    records = [
+        {"identity_id": f"{split}-{index}", "prompt": prompt, "split": split}
+        for split in ("train", "validation", "test")
+        for index, prompt in enumerate(("shared prompt", f"{split} unique", f"{split} next"))
+    ]
+
+    selected = _select_unique_prompt_records(records, per_split=1)
+
+    assert len(selected) == 3
+    assert len({record["prompt"] for record in selected}) == 3
