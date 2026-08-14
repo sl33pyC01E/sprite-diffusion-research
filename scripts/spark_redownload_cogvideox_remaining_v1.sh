@@ -18,7 +18,7 @@ fresh_download() {
     return 1
   fi
   mv --no-clobber "${partial}" "${quarantine}"
-  curl --fail --location --retry 20 --retry-all-errors \
+  curl --fail --location --retry 20 --retry-all-errors --continue-at - \
     --output "${partial}" "${base}/${relative}?download=true"
   test "$(stat --format=%s "${partial}")" = "${expected_bytes}"
   echo "${expected_sha256}  ${partial}" | sha256sum --check --strict

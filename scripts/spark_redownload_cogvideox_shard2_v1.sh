@@ -15,7 +15,7 @@ if [[ -e "${destination}" || -e "${quarantine}" ]]; then
   exit 1
 fi
 mv --no-clobber "${partial}" "${quarantine}"
-curl --fail --location --retry 20 --retry-all-errors \
+curl --fail --location --retry 20 --retry-all-errors --continue-at - \
   --output "${partial}" \
   "https://huggingface.co/THUDM/CogVideoX-5b-I2V/resolve/${revision}/${relative}?download=true"
 test "$(stat --format=%s "${partial}")" = "${expected_bytes}"
