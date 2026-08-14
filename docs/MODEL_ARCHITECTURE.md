@@ -582,3 +582,29 @@ identity/verb/sequence/frame sampler and frozen CLIP states, but against
 deterministic SD VAE RGB latents under the original 1,000-step epsilon-noise
 schedule.  Because its fixed gray alpha composite discards transparency, this
 branch is a subject/detail quality control, never the canonical RGBA output.
+
+### Reference-conditioned latent motion endpoint refinement
+
+`ReferenceConditionedLatentMotionDiT` consumes a noised eight-frame latent video
+`[B, 8, 8, 64, 64]`, an exact reference-still latent `[B, 8, 64, 64]`, structured
+action conditioning, and exact per-frame phases. Separate target and reference
+patch encoders meet inside factorized spatial/temporal attention. The prediction is
+a motion residual relative to the reference latent, so unchanged appearance does
+not need to be regenerated from scratch.
+
+The bounded quality runner exposes three independently weighted objectives:
+random-time rectified flow, matched `t=1` endpoint velocity, and differentiable
+decoded-pixel reconstruction. The last objective passes the predicted latent
+through a frozen, hash-pinned RGBA decoder and applies the existing transparent
+sprite reconstruction loss; decoder weights never enter the optimizer. A parent
+checkpoint may initialize a refinement only when its SHA-256, plan, identity,
+ordered verbs, normalization, and architecture all match exactly. Current
+refinement restores model/conditioner weights but deliberately starts a fresh
+optimizer and records that policy in both checkpoint and report.
+
+Endpoint-only training is an evidence-backed quality mode for direct one-step
+animation reconstruction, not a substitute for a broad generative distribution.
+Random-time flow remains available for future multi-step sampling experiments, but
+the MUGEN six-action ablation found that it competed with the explicitly evaluated
+endpoint. Scaling must therefore report both sample quality and the intended
+sampling regime rather than assuming a flow loss is beneficial by definition.

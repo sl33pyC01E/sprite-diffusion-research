@@ -589,3 +589,50 @@ motion plan SHA-256 is
 reference latents. The next quality experiment trains the new reference-conditioned
 latent DiT on motion/residual latents, initially gating on block, walk/run, idle,
 normal attack, special attack, and super attack before broadening to rarer verbs.
+
+## MUGEN reference-conditioned latent motion quality ablation
+
+The first bounded stage-two benchmark uses one MUGEN identity and six visually
+same-subject clips: idle, walk, run, block, normal attack, and hurt. Special and
+super attacks remain indexed but are excluded here because manual inspection found
+an assist/transformation subject in the selected special clip and a full-screen
+camera/effect sequence in the super clip. This is an in-sample memorization and
+action-token-sensitivity benchmark, not held-out identity or text generalization.
+
+All variants use an exact canonical reference frame, eight-frame 128x128 RGBA
+targets encoded to 64x64x8 latents, the same shared endpoint noise, and the same
+four-block 128-wide reference-conditioned latent DiT. The initial mixed random-time
+flow plus endpoint model reached mean premultiplied-RGBA MAE `0.010126`, alpha IoU
+`0.939328`, and temporal-delta MAE `0.014534` after 6,000 steps. Its report SHA-256
+is `3092e73be2f9f2ee6458ee4154b8e7698f32001caa850827418bf636c872707e`.
+
+Removing the competing random-time objective while preserving the endpoint
+denoising architecture lowered the same metrics to `0.004814`, `0.974580`, and
+`0.006445`. Cyclically permuting the action token raised endpoint loss by `1.327501`,
+so the quality improvement did not erase action dependence. The endpoint-only
+checkpoint and report SHA-256 values are respectively
+`7ca8963fcc3d7d6b81e38ffd2795049890b1be5d30deb608b145182b11a98694` and
+`97c6527052fef6033f1b838c2474fc648d951a7c784a8d88f3242dbe0b4430ad`.
+
+The frozen autoencoder's exact-target reconstruction floor is mean
+premultiplied-RGBA MAE `0.002297`. A hash-verified warm start from the endpoint-only
+checkpoint, followed by 3,000 lower-rate steps with equal latent endpoint and
+differentiable frozen-decoder reconstruction objectives, reached `0.002589` mean
+premultiplied-RGBA MAE, `0.977395` alpha IoU, and `0.003377` temporal-delta MAE.
+That is only about 13% above the codec floor. Its action-token loss delta increased
+again to `1.333332`. The child checkpoint SHA-256 is
+`08befa96603389ae3e694a961280b9f976796ec71b51173fd3b3530984f9995e` and its
+report SHA-256 is
+`bde2ad17127584a75a68fe6644aad0c9d04743e5bdd1ac13bb5c0837cf91778e`.
+The report records that only weights were restored; the refinement uses a fresh
+optimizer rather than claiming bit-exact continuation.
+
+The canonical recomputed ablation, including per-action metrics, checkpoint/report
+hash verification, and codec-floor reconstruction, has SHA-256
+`6bd96812577dbd3695541e7d2bacb92a48f382409b26ab64c3cc1005ff1465d2` at
+`data/index/reports/mugen-reference-motion-quality-ablation-v1.json`. These results
+establish that the two-stage latent formulation is tractable for same-subject
+action reconstruction. They do not yet establish multi-identity generalization;
+the next training gate must hold identities out and must separately label the
+fighter, assist, transformation, projectile, and full-screen-effect roles present
+in MUGEN actions.
