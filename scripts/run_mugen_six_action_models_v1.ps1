@@ -22,8 +22,6 @@ $textBase = Join-Path $processed 'mugen-six-action-broad-sd14-clip-token-states-
 $motionArtifactsBase = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-motion-v1'
 $stillBase = Join-Path $experiments 'mugen-six-action-still-dit-scratch-v1-step50000'
 $motionBase = Join-Path $experiments 'mugen-six-action-dense-latent-motion-scratch-v1-step50000'
-$codecCheckpoint = Join-Path $experiments `
-    'mugen-six-action-rgba-autoencoder-2x-v1-20000\training-step-0020000.pt'
 $clipModel = Join-Path $root 'data\models\stable-diffusion-v1-4-eb7ecef2ce03-training-components'
 $clipIndexSha256 = '6c02b65f1d657f8db316c4976248b0ca6d2406b3396025e801b45c3ef6a91b47'
 
@@ -40,12 +38,36 @@ foreach ($input in @(
     $stillPlan,
     $latents,
     $coverageCaptioned,
-    $codecCheckpoint,
     (Join-Path $clipModel 'source-index.json')
 )) {
     if (-not (Test-Path -LiteralPath $input)) {
         throw "Model-pipeline input is incomplete: $input"
     }
+}
+$latentManifest = Get-Content -LiteralPath $latents -Raw | ConvertFrom-Json
+$codecCheckpoint = [string]$latentManifest.codec.checkpoint_path
+$codecCheckpointSha256 = [string]$latentManifest.codec.checkpoint_file_sha256
+if ([string]::IsNullOrWhiteSpace($codecCheckpoint) -or
+    [string]::IsNullOrWhiteSpace($codecCheckpointSha256)) {
+    throw 'Latent manifest does not bind its exact codec checkpoint and SHA-256'
+}
+$codecCheckpoint = [System.IO.Path]::GetFullPath($codecCheckpoint)
+$experimentsPrefix = [System.IO.Path]::GetFullPath($experiments) + `
+    [System.IO.Path]::DirectorySeparatorChar
+if (-not $codecCheckpoint.StartsWith(
+    $experimentsPrefix,
+    [System.StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "Latent manifest codec checkpoint is outside the experiments root: $codecCheckpoint"
+}
+if (-not (Test-Path -LiteralPath $codecCheckpoint -PathType Leaf)) {
+    throw "Latent manifest codec checkpoint is absent: $codecCheckpoint"
+}
+$actualCodecCheckpointSha256 = (
+    Get-FileHash -LiteralPath $codecCheckpoint -Algorithm SHA256
+).Hash.ToLowerInvariant()
+if ($actualCodecCheckpointSha256 -ne $codecCheckpointSha256.ToLowerInvariant()) {
+    throw 'Latent manifest codec checkpoint SHA-256 mismatch'
 }
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Global PyTorch Python is absent: $python"
