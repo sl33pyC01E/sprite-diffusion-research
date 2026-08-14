@@ -1,0 +1,1126 @@
+"""Resumable matched-action training for reference-conditioned MUGEN motion."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import io
+import json
+import math
+import os
+import tempfile
+from collections import defaultdict
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Literal
+
+import numpy as np
+
+from spritelab.models.latent_motion_dit import (
+    LatentMotionDiTConfig,
+    ReferenceConditionedLatentMotionDiT,
+)
+from spritelab.models.sprite_autoencoder import (
+    SpriteAutoencoderConfig,
+    SpriteRGBAAutoencoder,
+    sprite_reconstruction_loss,
+)
+from spritelab.mugen_motion_dataset import _array_sha256
+from spritelab.previews import export_rgba_clip_preview
+from spritelab.spark_caption import canonical_json_bytes
+from spritelab.storage import DiskGuard
+
+try:
+    import torch
+    from torch import nn
+except ImportError as exc:  # pragma: no cover - optional dependency boundary
+    torch = None
+    nn = None
+    _TORCH_IMPORT_ERROR: ImportError | None = exc
+else:
+    _TORCH_IMPORT_ERROR = None
+
+Precision = Literal["float32", "bfloat16"]
+
+
+class LatentMotionTrainingError(ValueError):
+    """Raised when a broad motion training contract is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class LatentMotionTrainingConfig:
+    """Quality-first matched-action contract for one 4090-class GPU."""
+
+    gradient_accumulation: int = 4
+    learning_rate: float = 2e-4
+    minimum_learning_rate: float = 2e-5
+    warmup_steps: int = 500
+    weight_decay: float = 0.01
+    gradient_clip_norm: float = 1.0
+    ema_decay: float = 0.9995
+    latent_endpoint_weight: float = 1.0
+    pixel_endpoint_weight: float = 1.0
+    steps: int = 15_000
+    log_every: int = 25
+    validate_every: int = 500
+    checkpoint_every: int = 1_000
+    validation_pairs: int = 8
+    preview_pairs: int = 4
+    seed: int = 20260825
+    device: str = "cuda"
+    precision: Precision = "bfloat16"
+    model: LatentMotionDiTConfig = LatentMotionDiTConfig(
+        latent_size=64,
+        num_frames=8,
+        latent_channels=8,
+        patch_size=4,
+        model_dim=256,
+        depth=8,
+        num_heads=8,
+        condition_dim=256,
+    )
+
+    def __post_init__(self) -> None:
+        for name in (
+            "gradient_accumulation",
+            "steps",
+            "log_every",
+            "validate_every",
+            "checkpoint_every",
+            "validation_pairs",
+            "preview_pairs",
+            "seed",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if isinstance(self.warmup_steps, bool) or not isinstance(self.warmup_steps, int):
+            raise ValueError("warmup_steps must be an integer")
+        if not 0 <= self.warmup_steps < self.steps:
+            raise ValueError("warmup_steps must be in [0,steps)")
+        for name in ("learning_rate", "gradient_clip_norm"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        for name in (
+            "minimum_learning_rate",
+            "weight_decay",
+            "latent_endpoint_weight",
+            "pixel_endpoint_weight",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if self.minimum_learning_rate > self.learning_rate:
+            raise ValueError("minimum_learning_rate cannot exceed learning_rate")
+        if self.latent_endpoint_weight == 0 and self.pixel_endpoint_weight == 0:
+            raise ValueError("at least one endpoint objective must be positive")
+        if not math.isfinite(self.ema_decay) or not 0 <= self.ema_decay < 1:
+            raise ValueError("ema_decay must be in [0,1)")
+        if self.device not in {"cpu", "cuda"}:
+            raise ValueError("device must be cpu or cuda")
+        if self.precision not in {"float32", "bfloat16"}:
+            raise ValueError("precision must be float32 or bfloat16")
+
+
+@dataclass(frozen=True, slots=True)
+class LatentMotionTrainingRow:
+    sequence_id: str
+    identity_id: str
+    verb: str
+    action_index: int
+    split: str
+    duration_ms: tuple[float, ...]
+    loop_mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class LatentMotionTrainingCorpus:
+    rows: tuple[LatentMotionTrainingRow, ...]
+    train_indices: tuple[int, ...]
+    validation_indices: tuple[int, ...]
+    test_indices: tuple[int, ...]
+    action_vocabulary: tuple[str, ...]
+    target_latents: np.ndarray
+    reference_latents: np.ndarray
+    target_rgba: np.ndarray
+    phases: np.ndarray
+    channel_mean: tuple[float, ...]
+    channel_standard_deviation: tuple[float, ...]
+    autoencoder_checkpoint_path: Path
+    autoencoder_architecture: dict[str, Any]
+    contract: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class LatentMotionTrainingResult:
+    output_directory: Path
+    report_path: Path
+    training_checkpoint_path: Path
+    inference_checkpoint_path: Path
+    report_sha256: str
+
+
+if torch is not None and nn is not None:
+
+    class _ActionConditionedMotionModel(nn.Module):
+        def __init__(self, config: LatentMotionDiTConfig, action_count: int) -> None:
+            super().__init__()
+            self.dit = ReferenceConditionedLatentMotionDiT(config)
+            self.action_embedding = nn.Embedding(action_count, config.condition_dim)
+            self.action_norm = nn.LayerNorm(config.condition_dim)
+
+        def forward(
+            self,
+            video: torch.Tensor,
+            reference: torch.Tensor,
+            timesteps: torch.Tensor,
+            action_indices: torch.Tensor,
+            *,
+            frame_phase: torch.Tensor,
+        ) -> torch.Tensor:
+            context = self.action_norm(self.action_embedding(action_indices)).unsqueeze(1)
+            return self.dit(
+                video,
+                reference,
+                timesteps,
+                context,
+                frame_phase=frame_phase,
+            )
+
+
+def build_matched_action_index(
+    rows: tuple[LatentMotionTrainingRow, ...], indices: tuple[int, ...]
+) -> dict[str, dict[str, int]]:
+    """Build identity -> verb -> canonical row for causal matched sampling."""
+
+    grouped: dict[str, dict[str, int]] = defaultdict(dict)
+    for index in indices:
+        row = rows[index]
+        if row.verb in grouped[row.identity_id]:
+            raise ValueError(f"duplicate canonical identity/verb: {row.identity_id}/{row.verb}")
+        grouped[row.identity_id][row.verb] = index
+    return {
+        identity: dict(sorted(verbs.items(), key=lambda item: item[0].encode()))
+        for identity, verbs in sorted(grouped.items(), key=lambda item: item[0].encode())
+        if len(verbs) >= 2
+    }
+
+
+def sample_matched_action_pair(
+    index: dict[str, dict[str, int]], *, generator: Any
+) -> tuple[int, int]:
+    """Uniformly sample one identity and two distinct action targets."""
+
+    runtime = _require_torch()
+    if not index:
+        raise ValueError("matched action index cannot be empty")
+    identities = tuple(index)
+    identity = identities[int(runtime.randint(len(identities), (1,), generator=generator))]
+    verbs = tuple(index[identity])
+    order = runtime.randperm(len(verbs), generator=generator)[:2].tolist()
+    return index[identity][verbs[order[0]]], index[identity][verbs[order[1]]]
+
+
+def load_latent_motion_training_corpus(
+    manifest_path: Path | str, *, verify_hashes: bool = True
+) -> LatentMotionTrainingCorpus:
+    """Load the complete canonical manifest and exact latent/RGBA closure."""
+
+    manifest_file = Path(manifest_path).resolve()
+    manifest_bytes = manifest_file.read_bytes()
+    manifest = _json_object(manifest_bytes, "training manifest")
+    if manifest.get("artifact_kind") != (
+        "mugen_reference_conditioned_primary_motion_training_manifest"
+    ):
+        raise LatentMotionTrainingError("training manifest has the wrong artifact kind")
+    config = manifest.get("config")
+    if not isinstance(config, dict) or config.get("one_sequence_per_identity_verb") is not True:
+        raise LatentMotionTrainingError("training manifest is not canonical identity/action data")
+    records = _counted_records(manifest, "training manifest")
+    source = manifest.get("source")
+    if not isinstance(source, dict):
+        raise LatentMotionTrainingError("training manifest source is missing")
+    plan_path = Path(_required_text(source, "motion_plan_path")).resolve()
+    plan_bytes = plan_path.read_bytes()
+    if hashlib.sha256(plan_bytes).hexdigest() != source.get("motion_plan_file_sha256"):
+        raise LatentMotionTrainingError("motion-plan hash differs")
+    plan = _json_object(plan_bytes, "motion plan")
+    plan_source = plan.get("source")
+    if not isinstance(plan_source, dict):
+        raise LatentMotionTrainingError("motion-plan source is missing")
+    latent_source = plan_source.get("latent_manifest")
+    materialization_source = plan_source.get("materialization")
+    if not isinstance(latent_source, dict) or not isinstance(materialization_source, dict):
+        raise LatentMotionTrainingError("latent/materialization source is missing")
+    latent_manifest_path = Path(_required_text(latent_source, "path")).resolve()
+    latent_manifest_bytes = latent_manifest_path.read_bytes()
+    if hashlib.sha256(latent_manifest_bytes).hexdigest() != latent_source.get("file_sha256"):
+        raise LatentMotionTrainingError("latent-manifest hash differs")
+    latent_manifest = _json_object(latent_manifest_bytes, "latent manifest")
+    materialization_path = Path(_required_text(materialization_source, "path")).resolve()
+    if _file_sha256(materialization_path) != materialization_source.get("file_sha256"):
+        raise LatentMotionTrainingError("materialization hash differs")
+    normalization = latent_manifest.get("normalization")
+    codec = latent_manifest.get("codec")
+    if not isinstance(normalization, dict) or not isinstance(codec, dict):
+        raise LatentMotionTrainingError("normalization/codec is missing")
+    mean = _float_tuple(normalization.get("channel_mean"), "channel mean")
+    std = _float_tuple(normalization.get("channel_standard_deviation"), "channel std")
+    autoencoder_path = Path(_required_text(codec, "checkpoint_path")).resolve()
+    if _file_sha256(autoencoder_path) != codec.get("checkpoint_file_sha256"):
+        raise LatentMotionTrainingError("autoencoder checkpoint hash differs")
+    architecture = codec.get("architecture")
+    if not isinstance(architecture, dict):
+        raise LatentMotionTrainingError("autoencoder architecture is missing")
+
+    actions = tuple(sorted({_record_verb(record) for record in records}, key=str.encode))
+    action_to_index = {action: index for index, action in enumerate(actions)}
+    latent_root = latent_manifest_path.parent
+    materialization_root = materialization_path.parent
+    latent_cache: dict[str, np.ndarray] = {}
+    rows = []
+    target_latents = []
+    reference_latents = []
+    target_rgba = []
+    phases = []
+    for record in records:
+        sequence_id = _required_text(record, "sequence_id")
+        target = _required_dict(record, "target")
+        reference = _required_dict(record, "reference")
+        target_latent_record = _required_dict(target, "latent")
+        target_latent = _load_array(
+            latent_root,
+            target_latent_record,
+            dtype=np.float16,
+            shape=(8, 8, 64, 64),
+            label=f"target latent {sequence_id}",
+            verify_hashes=verify_hashes,
+            cache=latent_cache,
+        )
+        reference_record = _required_dict(reference, "latent")
+        reference_full = _load_array(
+            latent_root,
+            reference_record,
+            dtype=np.float16,
+            shape=(8, 8, 64, 64),
+            label=f"reference latent {sequence_id}",
+            verify_hashes=verify_hashes,
+            cache=latent_cache,
+        )
+        frame_index = reference.get("frame_index")
+        if (
+            isinstance(frame_index, bool)
+            or not isinstance(frame_index, int)
+            or not 0 <= frame_index < 8
+        ):
+            raise LatentMotionTrainingError(f"reference frame index differs for {sequence_id}")
+        reference_frame = np.ascontiguousarray(reference_full[frame_index])
+        if verify_hashes and _array_sha256(reference_frame) != reference_record.get(
+            "frame_array_content_sha256"
+        ):
+            raise LatentMotionTrainingError(f"reference frame hash differs for {sequence_id}")
+        source_pixels = _required_dict(target, "source_pixels")
+        rgba = _load_array(
+            materialization_root,
+            source_pixels,
+            dtype=np.uint8,
+            shape=(8, 128, 128, 4),
+            label=f"target RGBA {sequence_id}",
+            verify_hashes=verify_hashes,
+            cache=None,
+        )
+        phase = np.asarray(target.get("phase"), dtype=np.float32)
+        if phase.shape != (8,) or not np.isfinite(phase).all() or np.any((phase < 0) | (phase > 1)):
+            raise LatentMotionTrainingError(f"target phase differs for {sequence_id}")
+        durations = target.get("duration_ms")
+        if (
+            not isinstance(durations, list)
+            or len(durations) != 8
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+                for value in durations
+            )
+        ):
+            raise LatentMotionTrainingError(f"target durations differ for {sequence_id}")
+        verb = _record_verb(record)
+        rows.append(
+            LatentMotionTrainingRow(
+                sequence_id=sequence_id,
+                identity_id=_required_text(record, "identity_id"),
+                verb=verb,
+                action_index=action_to_index[verb],
+                split=_required_text(record, "split"),
+                duration_ms=tuple(float(value) for value in durations),
+                loop_mode=_required_text(target, "loop_mode"),
+            )
+        )
+        target_latents.append(target_latent)
+        reference_latents.append(reference_frame)
+        target_rgba.append(rgba)
+        phases.append(phase)
+    del latent_cache
+    row_tuple = tuple(rows)
+    split_indices = {
+        split: tuple(index for index, row in enumerate(row_tuple) if row.split == split)
+        for split in ("train", "validation", "test")
+    }
+    if any(not values for values in split_indices.values()):
+        raise LatentMotionTrainingError("train/validation/test splits must be non-empty")
+    identity_splits: defaultdict[str, set[str]] = defaultdict(set)
+    for row in row_tuple:
+        identity_splits[row.identity_id].add(row.split)
+    if any(len(values) != 1 for values in identity_splits.values()):
+        raise LatentMotionTrainingError("identities cross dataset splits")
+    contract = {
+        "action_vocabulary": list(actions),
+        "autoencoder_checkpoint_sha256": _file_sha256(autoencoder_path),
+        "latent_manifest_file_sha256": hashlib.sha256(latent_manifest_bytes).hexdigest(),
+        "manifest_file_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "motion_plan_file_sha256": hashlib.sha256(plan_bytes).hexdigest(),
+        "record_count": len(rows),
+        "split_identities": {
+            split: len({row_tuple[index].identity_id for index in indices})
+            for split, indices in split_indices.items()
+        },
+        "split_rows": {split: len(indices) for split, indices in split_indices.items()},
+    }
+    contract["canonical_sha256"] = hashlib.sha256(canonical_json_bytes(contract)).hexdigest()
+    return LatentMotionTrainingCorpus(
+        rows=row_tuple,
+        train_indices=split_indices["train"],
+        validation_indices=split_indices["validation"],
+        test_indices=split_indices["test"],
+        action_vocabulary=actions,
+        target_latents=np.ascontiguousarray(np.stack(target_latents)),
+        reference_latents=np.ascontiguousarray(np.stack(reference_latents)),
+        target_rgba=np.ascontiguousarray(np.stack(target_rgba)),
+        phases=np.ascontiguousarray(np.stack(phases)),
+        channel_mean=mean,
+        channel_standard_deviation=std,
+        autoencoder_checkpoint_path=autoencoder_path,
+        autoencoder_architecture=architecture,
+        contract=contract,
+    )
+
+
+def run_latent_motion_training(
+    manifest_path: Path | str,
+    output_directory: Path | str,
+    *,
+    config: LatentMotionTrainingConfig | None = None,
+    resume_checkpoint_path: Path | str | None = None,
+    expected_resume_sha256: str | None = None,
+    disk_guard: DiskGuard | None = None,
+) -> LatentMotionTrainingResult:
+    """Train a no-clobber, resumable, held-out-identity motion model."""
+
+    runtime = _require_torch()
+    experiment = config or LatentMotionTrainingConfig()
+    output = Path(output_directory).resolve()
+    if output.exists():
+        raise FileExistsError(f"Refusing to replace latent-motion output: {output}")
+    if (resume_checkpoint_path is None) != (expected_resume_sha256 is None):
+        raise ValueError("resume checkpoint and expected SHA-256 must be supplied together")
+    device = runtime.device(experiment.device)
+    if device.type == "cuda" and not runtime.cuda.is_available():
+        raise RuntimeError("CUDA was requested but is unavailable")
+    if experiment.precision == "bfloat16" and device.type != "cuda":
+        raise ValueError("bfloat16 latent-motion training requires CUDA")
+    guard = disk_guard or DiskGuard(output.parent, min_free_bytes=100 * 1024**3)
+    guard.require_capacity(12 * 1024**3, label="broad latent-motion training")
+    corpus = load_latent_motion_training_corpus(manifest_path, verify_hashes=True)
+    output.mkdir(parents=True, exist_ok=False)
+    history_path = output / "training-history.jsonl"
+    with history_path.open("x", encoding="utf-8", newline="\n") as history:
+        return _train(
+            runtime,
+            corpus=corpus,
+            output=output,
+            history=history,
+            config=experiment,
+            device=device,
+            resume_checkpoint_path=(
+                Path(resume_checkpoint_path).resolve()
+                if resume_checkpoint_path is not None
+                else None
+            ),
+            expected_resume_sha256=expected_resume_sha256,
+            disk_guard=guard,
+        )
+
+
+def _train(
+    runtime: Any,
+    *,
+    corpus: LatentMotionTrainingCorpus,
+    output: Path,
+    history: Any,
+    config: LatentMotionTrainingConfig,
+    device: Any,
+    resume_checkpoint_path: Path | None,
+    expected_resume_sha256: str | None,
+    disk_guard: DiskGuard,
+) -> LatentMotionTrainingResult:
+    runtime.manual_seed(config.seed)
+    if device.type == "cuda":
+        runtime.cuda.manual_seed_all(config.seed)
+    model = _ActionConditionedMotionModel(config.model, len(corpus.action_vocabulary)).to(device)
+    ema = copy.deepcopy(model).eval().requires_grad_(False)
+    optimizer = runtime.optim.AdamW(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay,
+        fused=device.type == "cuda",
+    )
+    decoder = _load_frozen_decoder(runtime, corpus, device=device)
+    sampler_generator = runtime.Generator(device="cpu").manual_seed(config.seed + 1)
+    noise_generator = runtime.Generator(device=device).manual_seed(config.seed + 2)
+    start_step = 0
+    lineage = None
+    if resume_checkpoint_path is not None:
+        assert expected_resume_sha256 is not None
+        parent = _load_resume(
+            runtime,
+            resume_checkpoint_path,
+            expected_sha256=expected_resume_sha256,
+            corpus=corpus,
+            config=config,
+        )
+        start_step = int(parent["step"])
+        if start_step >= config.steps:
+            raise LatentMotionTrainingError("resume step must be below cumulative steps")
+        model.load_state_dict(parent["raw_model"], strict=True)
+        ema.load_state_dict(parent["ema_model"], strict=True)
+        optimizer.load_state_dict(parent["optimizer"])
+        sampler_generator.set_state(parent["rng_state"]["sampler"])
+        noise_generator.set_state(parent["rng_state"]["noise"])
+        runtime.set_rng_state(parent["rng_state"]["torch_cpu"])
+        if device.type == "cuda":
+            runtime.cuda.set_rng_state(parent["rng_state"]["cuda"], device=device)
+        lineage = {
+            "parent_checkpoint_path": str(resume_checkpoint_path),
+            "parent_checkpoint_sha256": expected_resume_sha256,
+            "parent_step": start_step,
+        }
+    train_index = build_matched_action_index(corpus.rows, corpus.train_indices)
+    validation_selection = _validation_pairs(corpus, config.validation_pairs)
+    mean = runtime.tensor(corpus.channel_mean, device=device).view(1, 1, 8, 1, 1)
+    std = runtime.tensor(corpus.channel_standard_deviation, device=device).view(1, 1, 8, 1, 1)
+    dtype = runtime.bfloat16 if config.precision == "bfloat16" else runtime.float32
+    autocast = config.precision == "bfloat16"
+    model.train()
+    latest_validation = None
+    for step_index in range(start_step, config.steps):
+        step = step_index + 1
+        learning_rate = _learning_rate(step, config)
+        for group in optimizer.param_groups:
+            group["lr"] = learning_rate
+        optimizer.zero_grad(set_to_none=True)
+        accumulated_latent = 0.0
+        accumulated_pixel = 0.0
+        accumulated_loss = 0.0
+        for _ in range(config.gradient_accumulation):
+            selection = sample_matched_action_pair(train_index, generator=sampler_generator)
+            target, reference, target_rgba, phases, actions = _batch(
+                runtime, corpus, selection, device=device, mean=mean, std=std
+            )
+            clean = target - reference.unsqueeze(1)
+            shared_noise = runtime.randn(
+                (1, *clean.shape[1:]), device=device, generator=noise_generator
+            ).expand_as(clean)
+            times = runtime.ones((2,), device=device)
+            with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
+                predicted = model(
+                    shared_noise,
+                    reference,
+                    times,
+                    actions,
+                    frame_phase=phases,
+                )
+                latent_loss = runtime.nn.functional.mse_loss(
+                    predicted.float(), (shared_noise - clean).float()
+                )
+                generated_residual = shared_noise - predicted
+                generated_latent = (reference.unsqueeze(1) + generated_residual) * std + mean
+                logits = decoder.decode_logits(generated_latent.reshape(-1, 8, 64, 64))
+                pixel_loss = sprite_reconstruction_loss(logits, target_rgba).total
+                loss = (
+                    config.latent_endpoint_weight * latent_loss
+                    + config.pixel_endpoint_weight * pixel_loss
+                )
+                scaled = loss / config.gradient_accumulation
+            if not bool(runtime.isfinite(scaled)):
+                raise RuntimeError(f"non-finite latent-motion loss at step {step}")
+            scaled.backward()
+            accumulated_latent += float(latent_loss.detach().cpu())
+            accumulated_pixel += float(pixel_loss.detach().cpu())
+            accumulated_loss += float(loss.detach().cpu())
+        gradient_norm = float(
+            runtime.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
+            .detach()
+            .cpu()
+        )
+        optimizer.step()
+        _ema_update(runtime, ema, model, config.ema_decay)
+        if step == 1 or step % config.validate_every == 0 or step == config.steps:
+            latest_validation = _validate(
+                runtime,
+                corpus,
+                validation_selection,
+                ema,
+                decoder,
+                device=device,
+                dtype=dtype,
+                autocast=autocast,
+                mean=mean,
+                std=std,
+                seed=config.seed + 20_000,
+            )
+        if step == 1 or step % config.log_every == 0 or step == config.steps:
+            row = {
+                "gradient_norm_before_clip": gradient_norm,
+                "latent_endpoint_loss": accumulated_latent / config.gradient_accumulation,
+                "learning_rate": learning_rate,
+                "loss": accumulated_loss / config.gradient_accumulation,
+                "pixel_endpoint_loss": accumulated_pixel / config.gradient_accumulation,
+                "step": step,
+                "validation": latest_validation
+                if step == 1 or step % config.validate_every == 0
+                else None,
+            }
+            history.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
+            history.flush()
+            os.fsync(history.fileno())
+        if step % config.checkpoint_every == 0 or step == config.steps:
+            _write_training_checkpoint(
+                runtime,
+                output / f"training-step-{step:07d}.pt",
+                corpus=corpus,
+                config=config,
+                step=step,
+                model=model,
+                ema=ema,
+                optimizer=optimizer,
+                sampler_generator=sampler_generator,
+                noise_generator=noise_generator,
+                device=device,
+                disk_guard=disk_guard,
+            )
+    final_checkpoint = output / f"training-step-{config.steps:07d}.pt"
+    inference_checkpoint = output / "checkpoint-ema.pt"
+    _atomic_torch_save(
+        runtime,
+        inference_checkpoint,
+        {
+            "action_vocabulary": list(corpus.action_vocabulary),
+            "artifact_kind": "mugen_reference_latent_motion_ema_inference_checkpoint",
+            "config": asdict(config),
+            "corpus": corpus.contract,
+            "ema_model": ema.state_dict(),
+            "normalization": {
+                "channel_mean": list(corpus.channel_mean),
+                "channel_standard_deviation": list(corpus.channel_standard_deviation),
+            },
+            "step": config.steps,
+        },
+        disk_guard=disk_guard,
+    )
+    preview_rows = _export_validation_previews(
+        runtime,
+        corpus,
+        validation_selection[: config.preview_pairs],
+        ema,
+        decoder,
+        output=output / "previews",
+        device=device,
+        dtype=dtype,
+        autocast=autocast,
+        mean=mean,
+        std=std,
+        seed=config.seed + 20_000,
+        disk_guard=disk_guard,
+    )
+    report = {
+        "artifact_kind": "mugen_reference_latent_motion_training",
+        "claim": "held-out-identity validation of canonical reference plus action-token motion",
+        "config": asdict(config),
+        "corpus": corpus.contract,
+        "final_validation": latest_validation,
+        "history": {
+            "file_sha256": _file_sha256(output / "training-history.jsonl"),
+            "path": "training-history.jsonl",
+        },
+        "inference_checkpoint": {
+            "file_sha256": _file_sha256(inference_checkpoint),
+            "path": inference_checkpoint.name,
+        },
+        "lineage": lineage,
+        "previews": preview_rows,
+        "runtime": _runtime_facts(runtime, device),
+        "step": config.steps,
+        "training_checkpoint": {
+            "file_sha256": _file_sha256(final_checkpoint),
+            "path": final_checkpoint.name,
+        },
+    }
+    report_path = output / "training-report.json"
+    report_payload = canonical_json_bytes(report)
+    _atomic_bytes(report_path, report_payload, disk_guard=disk_guard)
+    return LatentMotionTrainingResult(
+        output_directory=output,
+        report_path=report_path,
+        training_checkpoint_path=final_checkpoint,
+        inference_checkpoint_path=inference_checkpoint,
+        report_sha256=hashlib.sha256(report_payload).hexdigest(),
+    )
+
+
+def _batch(
+    runtime: Any,
+    corpus: LatentMotionTrainingCorpus,
+    selection: tuple[int, int],
+    *,
+    device: Any,
+    mean: Any,
+    std: Any,
+) -> tuple[Any, Any, Any, Any, Any]:
+    indices = list(selection)
+    target = runtime.from_numpy(corpus.target_latents[indices].astype(np.float32)).to(device)
+    reference = runtime.from_numpy(corpus.reference_latents[indices].astype(np.float32)).to(device)
+    target = (target - mean) / std
+    reference = (reference - mean[:, 0]) / std[:, 0]
+    rgba = (
+        runtime.from_numpy(corpus.target_rgba[indices])
+        .to(device=device, dtype=runtime.float32)
+        .permute(0, 1, 4, 2, 3)
+        .reshape(-1, 4, 128, 128)
+        .div(255)
+    )
+    phases = runtime.from_numpy(corpus.phases[indices]).to(device)
+    actions = runtime.tensor([corpus.rows[index].action_index for index in indices], device=device)
+    return target, reference, rgba, phases, actions
+
+
+def _validation_pairs(
+    corpus: LatentMotionTrainingCorpus, maximum_pairs: int
+) -> tuple[tuple[int, int], ...]:
+    index = build_matched_action_index(corpus.rows, corpus.validation_indices)
+    output = []
+    for identity in sorted(index, key=str.encode):
+        verbs = tuple(index[identity])
+        output.append((index[identity][verbs[0]], index[identity][verbs[1]]))
+        if len(output) == maximum_pairs:
+            break
+    if not output:
+        raise LatentMotionTrainingError("validation has no matched action pairs")
+    return tuple(output)
+
+
+def _validate(
+    runtime: Any,
+    corpus: LatentMotionTrainingCorpus,
+    selection: tuple[tuple[int, int], ...],
+    model: Any,
+    decoder: Any,
+    *,
+    device: Any,
+    dtype: Any,
+    autocast: bool,
+    mean: Any,
+    std: Any,
+    seed: int,
+) -> dict[str, float]:
+    model.eval()
+    totals: defaultdict[str, float] = defaultdict(float)
+    generator = runtime.Generator(device=device).manual_seed(seed)
+    with runtime.no_grad():
+        for pair in selection:
+            target, reference, target_rgba, phases, actions = _batch(
+                runtime, corpus, pair, device=device, mean=mean, std=std
+            )
+            clean = target - reference.unsqueeze(1)
+            noise = runtime.randn(
+                (1, *clean.shape[1:]), device=device, generator=generator
+            ).expand_as(clean)
+            times = runtime.ones((2,), device=device)
+            with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
+                correct = model(noise, reference, times, actions, frame_phase=phases)
+                permuted = model(
+                    noise, reference, times, runtime.flip(actions, (0,)), frame_phase=phases
+                )
+                target_velocity = noise - clean
+                correct_mse = runtime.nn.functional.mse_loss(
+                    correct.float(), target_velocity.float()
+                )
+                permuted_mse = runtime.nn.functional.mse_loss(
+                    permuted.float(), target_velocity.float()
+                )
+                generated = (reference.unsqueeze(1) + noise - correct) * std + mean
+                logits = decoder.decode_logits(generated.reshape(-1, 8, 64, 64))
+                reconstruction = sprite_reconstruction_loss(logits, target_rgba)
+            predicted_rgba = runtime.sigmoid(logits.float()).reshape(2, 8, 4, 128, 128)
+            target_5d = target_rgba.reshape(2, 8, 4, 128, 128)
+            predicted_alpha = predicted_rgba[:, :, 3:4]
+            target_alpha = target_5d[:, :, 3:4]
+            predicted_pm = runtime.cat(
+                (predicted_rgba[:, :, :3] * predicted_alpha, predicted_alpha), dim=2
+            )
+            target_pm = runtime.cat((target_5d[:, :, :3] * target_alpha, target_alpha), dim=2)
+            intersection = ((predicted_alpha >= 0.5) & (target_alpha >= 0.5)).sum()
+            union = ((predicted_alpha >= 0.5) | (target_alpha >= 0.5)).sum().clamp_min(1)
+            temporal = runtime.nn.functional.l1_loss(
+                predicted_pm[:, 1:] - predicted_pm[:, :-1],
+                target_pm[:, 1:] - target_pm[:, :-1],
+            )
+            totals["latent_endpoint_mse"] += float(correct_mse.cpu())
+            totals["action_permuted_mse"] += float(permuted_mse.cpu())
+            totals["premultiplied_rgba_mae"] += float(
+                runtime.nn.functional.l1_loss(predicted_pm, target_pm).cpu()
+            )
+            totals["alpha_iou_127"] += float((intersection / union).cpu())
+            totals["temporal_delta_mae"] += float(temporal.cpu())
+            totals["decoder_reconstruction_loss"] += float(reconstruction.total.cpu())
+    model.train()
+    count = len(selection)
+    output = {key: value / count for key, value in totals.items()}
+    output["action_token_loss_delta"] = (
+        output["action_permuted_mse"] - output["latent_endpoint_mse"]
+    )
+    return output
+
+
+def _export_validation_previews(
+    runtime: Any,
+    corpus: LatentMotionTrainingCorpus,
+    selection: tuple[tuple[int, int], ...],
+    model: Any,
+    decoder: Any,
+    *,
+    output: Path,
+    device: Any,
+    dtype: Any,
+    autocast: bool,
+    mean: Any,
+    std: Any,
+    seed: int,
+    disk_guard: DiskGuard,
+) -> list[dict[str, Any]]:
+    rows = []
+    generator = runtime.Generator(device=device).manual_seed(seed)
+    model.eval()
+    with runtime.no_grad():
+        for pair_index, pair in enumerate(selection):
+            target, reference, _target_rgba, phases, actions = _batch(
+                runtime, corpus, pair, device=device, mean=mean, std=std
+            )
+            noise = runtime.randn(
+                (1, *target.shape[1:]), device=device, generator=generator
+            ).expand_as(target)
+            with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
+                predicted = model(
+                    noise,
+                    reference,
+                    runtime.ones((2,), device=device),
+                    actions,
+                    frame_phase=phases,
+                )
+                latent = (reference.unsqueeze(1) + noise - predicted) * std + mean
+                decoded = decoder.decode(latent.reshape(-1, 8, 64, 64)).clamp(0, 1)
+            arrays = (
+                decoded.mul(255)
+                .round()
+                .to(runtime.uint8)
+                .reshape(2, 8, 4, 128, 128)
+                .permute(0, 1, 3, 4, 2)
+                .cpu()
+                .numpy()
+            )
+            for offset, row_index in enumerate(pair):
+                row = corpus.rows[row_index]
+                target_preview = export_rgba_clip_preview(
+                    corpus.target_rgba[row_index],
+                    output,
+                    artifact_stem=f"{pair_index:02d}-{offset}-{row.identity_id[-8:]}-{row.verb}-target",
+                    duration_ms=row.duration_ms,
+                    loop_mode=_preview_loop_mode(row.loop_mode),
+                    integer_scale=2,
+                    preserve_frame_slots=True,
+                    disk_guard=disk_guard,
+                )
+                generated_preview = export_rgba_clip_preview(
+                    arrays[offset],
+                    output,
+                    artifact_stem=f"{pair_index:02d}-{offset}-{row.identity_id[-8:]}-{row.verb}-generated",
+                    duration_ms=row.duration_ms,
+                    loop_mode=_preview_loop_mode(row.loop_mode),
+                    integer_scale=2,
+                    preserve_frame_slots=True,
+                    disk_guard=disk_guard,
+                )
+                rows.append(
+                    {
+                        "generated_animated_sha256": generated_preview.animated_png_sha256,
+                        "generated_sheet_sha256": generated_preview.contact_sheet_sha256,
+                        "identity_id": row.identity_id,
+                        "sequence_id": row.sequence_id,
+                        "target_animated_sha256": target_preview.animated_png_sha256,
+                        "target_sheet_sha256": target_preview.contact_sheet_sha256,
+                        "verb": row.verb,
+                    }
+                )
+    return rows
+
+
+def _load_frozen_decoder(runtime: Any, corpus: LatentMotionTrainingCorpus, *, device: Any) -> Any:
+    checkpoint = runtime.load(
+        corpus.autoencoder_checkpoint_path, map_location="cpu", weights_only=True
+    )
+    architecture = dict(corpus.autoencoder_architecture)
+    if isinstance(architecture.get("channel_multipliers"), list):
+        architecture["channel_multipliers"] = tuple(architecture["channel_multipliers"])
+    decoder = SpriteRGBAAutoencoder(SpriteAutoencoderConfig(**architecture)).to(device).eval()
+    decoder.load_state_dict(checkpoint["ema"], strict=True)
+    decoder.requires_grad_(False)
+    return decoder
+
+
+def _write_training_checkpoint(
+    runtime: Any,
+    path: Path,
+    *,
+    corpus: LatentMotionTrainingCorpus,
+    config: LatentMotionTrainingConfig,
+    step: int,
+    model: Any,
+    ema: Any,
+    optimizer: Any,
+    sampler_generator: Any,
+    noise_generator: Any,
+    device: Any,
+    disk_guard: DiskGuard,
+) -> None:
+    _atomic_torch_save(
+        runtime,
+        path,
+        {
+            "artifact_kind": "mugen_reference_latent_motion_resume_checkpoint",
+            "config": asdict(config),
+            "corpus": corpus.contract,
+            "ema_model": ema.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "raw_model": model.state_dict(),
+            "rng_state": {
+                "cuda": runtime.cuda.get_rng_state(device) if device.type == "cuda" else None,
+                "noise": noise_generator.get_state(),
+                "sampler": sampler_generator.get_state(),
+                "torch_cpu": runtime.get_rng_state(),
+            },
+            "runtime": _runtime_facts(runtime, device),
+            "step": step,
+        },
+        disk_guard=disk_guard,
+    )
+
+
+def _load_resume(
+    runtime: Any,
+    path: Path,
+    *,
+    expected_sha256: str,
+    corpus: LatentMotionTrainingCorpus,
+    config: LatentMotionTrainingConfig,
+) -> dict[str, Any]:
+    if _file_sha256(path) != expected_sha256:
+        raise LatentMotionTrainingError("resume checkpoint SHA-256 mismatch")
+    try:
+        value = runtime.load(path, map_location="cpu", weights_only=True)
+    except Exception as error:
+        raise LatentMotionTrainingError("resume checkpoint failed safe load") from error
+    if not isinstance(value, dict) or value.get("artifact_kind") != (
+        "mugen_reference_latent_motion_resume_checkpoint"
+    ):
+        raise LatentMotionTrainingError("resume checkpoint has the wrong artifact kind")
+    if value.get("corpus") != corpus.contract:
+        raise LatentMotionTrainingError("resume corpus contract differs")
+    parent_config = value.get("config")
+    if not isinstance(parent_config, dict):
+        raise LatentMotionTrainingError("resume config is missing")
+    current = asdict(config)
+    for key, parent_value in parent_config.items():
+        if key != "steps" and current.get(key) != parent_value:
+            raise LatentMotionTrainingError(f"resume config differs at {key!r}")
+    return value
+
+
+def _load_array(
+    root: Path,
+    record: dict[str, Any],
+    *,
+    dtype: Any,
+    shape: tuple[int, ...],
+    label: str,
+    verify_hashes: bool,
+    cache: dict[str, np.ndarray] | None,
+) -> np.ndarray:
+    relative = _required_text(record, "relative_path")
+    path = (root / relative).resolve()
+    if root != path and root not in path.parents:
+        raise LatentMotionTrainingError(f"{label} path escapes root")
+    cache_key = str(path)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+    payload = path.read_bytes()
+    if verify_hashes and hashlib.sha256(payload).hexdigest() != record.get("file_sha256"):
+        raise LatentMotionTrainingError(f"{label} file hash differs")
+    try:
+        value = np.load(io.BytesIO(payload), allow_pickle=False)
+    except (OSError, ValueError) as error:
+        raise LatentMotionTrainingError(f"{label} is unreadable") from error
+    if value.dtype != dtype or value.shape != shape or not bool(np.isfinite(value).all()):
+        raise LatentMotionTrainingError(f"{label} geometry/content differs")
+    value = np.ascontiguousarray(value)
+    if verify_hashes and _array_sha256(value) != record.get("array_content_sha256"):
+        raise LatentMotionTrainingError(f"{label} array hash differs")
+    if cache is not None:
+        cache[cache_key] = value
+    return value
+
+
+def _learning_rate(step: int, config: LatentMotionTrainingConfig) -> float:
+    if step <= config.warmup_steps and config.warmup_steps:
+        return config.learning_rate * step / config.warmup_steps
+    progress = (step - config.warmup_steps) / max(config.steps - config.warmup_steps, 1)
+    cosine = 0.5 * (1 + math.cos(math.pi * min(max(progress, 0), 1)))
+    return (
+        config.minimum_learning_rate
+        + (config.learning_rate - config.minimum_learning_rate) * cosine
+    )
+
+
+def _ema_update(runtime: Any, ema: Any, model: Any, decay: float) -> None:
+    with runtime.no_grad():
+        for target, source in zip(ema.parameters(), model.parameters(), strict=True):
+            target.lerp_(source.detach(), 1 - decay)
+        for target, source in zip(ema.buffers(), model.buffers(), strict=True):
+            target.copy_(source)
+
+
+def _record_verb(record: dict[str, Any]) -> str:
+    return _required_text(_required_dict(record, "conditioning"), "verb")
+
+
+def _counted_records(artifact: dict[str, Any], label: str) -> list[dict[str, Any]]:
+    records = artifact.get("records")
+    counts = artifact.get("counts")
+    if (
+        not isinstance(records, list)
+        or not isinstance(counts, dict)
+        or counts.get("sequences") != len(records)
+        or any(not isinstance(record, dict) for record in records)
+    ):
+        raise LatentMotionTrainingError(f"{label} record count differs")
+    return records
+
+
+def _required_text(value: dict[str, Any], key: str) -> str:
+    result = value.get(key)
+    if not isinstance(result, str) or not result:
+        raise LatentMotionTrainingError(f"field {key} must be non-empty text")
+    return result
+
+
+def _required_dict(value: dict[str, Any], key: str) -> dict[str, Any]:
+    result = value.get(key)
+    if not isinstance(result, dict):
+        raise LatentMotionTrainingError(f"field {key} must be an object")
+    return result
+
+
+def _float_tuple(value: Any, label: str) -> tuple[float, ...]:
+    if not isinstance(value, list) or len(value) != 8:
+        raise LatentMotionTrainingError(f"{label} must contain eight values")
+    output = tuple(float(item) for item in value)
+    if any(not math.isfinite(item) for item in output) or (
+        "std" in label and any(item <= 0 for item in output)
+    ):
+        raise LatentMotionTrainingError(f"{label} values are invalid")
+    return output
+
+
+def _json_object(payload: bytes, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise LatentMotionTrainingError(f"{label} is invalid JSON") from error
+    if not isinstance(value, dict):
+        raise LatentMotionTrainingError(f"{label} must contain an object")
+    return value
+
+
+def _preview_loop_mode(value: str) -> str:
+    return value if value in {"loop", "one_shot", "ping_pong"} else "one_shot"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _runtime_facts(runtime: Any, device: Any) -> dict[str, Any]:
+    return {
+        "cuda_version": runtime.version.cuda,
+        "device": str(device),
+        "device_name": runtime.cuda.get_device_name(device) if device.type == "cuda" else None,
+        "torch_version": str(runtime.__version__),
+    }
+
+
+def _atomic_bytes(path: Path, payload: bytes, *, disk_guard: DiskGuard) -> None:
+    if path.exists():
+        raise FileExistsError(f"Refusing to replace artifact: {path}")
+    disk_guard.require_capacity(len(payload), label=path.name)
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.rename(temporary, path)
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+
+def _atomic_torch_save(
+    runtime: Any,
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    disk_guard: DiskGuard,
+) -> None:
+    if path.exists():
+        raise FileExistsError(f"Refusing to replace checkpoint: {path}")
+    disk_guard.require_capacity(2 * 1024**3, label=path.name)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".pt", delete=False) as handle:
+        temporary = Path(handle.name)
+    try:
+        runtime.save(payload, temporary)
+        os.rename(temporary, path)
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+
+def _require_torch() -> Any:
+    if torch is None or nn is None:
+        raise RuntimeError("latent motion training requires PyTorch") from _TORCH_IMPORT_ERROR
+    return torch
