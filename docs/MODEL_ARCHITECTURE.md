@@ -669,6 +669,9 @@ For uniform-flow checkpoints, the external evaluator also publishes a matched
 one-step `t=1` endpoint control beside the configured multi-step trajectory. Both
 reuse the exact request order, phases, and fixed noise, so the comparison isolates
 sampler/trajectory behavior rather than a different input batch.
+The same external artifact contains a verb-balanced training-distribution control
+and an identity-disjoint test block. Their claims remain separate: the former tests
+fit and optimization; the latter tests transfer to characters excluded from training.
 Each gallery row now binds three matched animations with exact paths and hashes: the
 authored target, the requested-action output, and an action-token-substituted output
 generated from the same reference, frame phases, and noise. This makes directional

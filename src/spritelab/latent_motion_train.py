@@ -642,6 +642,7 @@ def evaluate_latent_motion_checkpoint(
     model.eval()
     decoder = _load_frozen_decoder(runtime, corpus, device=runtime_device)
     selection = _balanced_matched_pairs(corpus, corpus.test_indices, maximum_test_pairs)
+    training_selection = _balanced_matched_pairs(corpus, corpus.train_indices, maximum_test_pairs)
     mean = runtime.tensor(corpus.channel_mean, device=runtime_device).view(1, 1, 8, 1, 1)
     std = runtime.tensor(corpus.channel_standard_deviation, device=runtime_device).view(
         1, 1, 8, 1, 1
@@ -664,11 +665,42 @@ def evaluate_latent_motion_checkpoint(
         sampler_algorithm=checkpoint_config.sampler_algorithm,
     )
     direct_endpoint_metrics = None
+    training_metrics = _validate(
+        runtime,
+        corpus,
+        training_selection,
+        model,
+        decoder,
+        device=runtime_device,
+        dtype=dtype,
+        autocast=autocast,
+        mean=mean,
+        std=std,
+        seed=seed,
+        inference_steps=checkpoint_config.inference_steps,
+        sampler_algorithm=checkpoint_config.sampler_algorithm,
+    )
+    training_direct_endpoint_metrics = None
     if checkpoint_config.time_sampling == "uniform":
         direct_endpoint_metrics = _validate(
             runtime,
             corpus,
             selection,
+            model,
+            decoder,
+            device=runtime_device,
+            dtype=dtype,
+            autocast=autocast,
+            mean=mean,
+            std=std,
+            seed=seed,
+            inference_steps=1,
+            sampler_algorithm="euler",
+        )
+        training_direct_endpoint_metrics = _validate(
+            runtime,
+            corpus,
+            training_selection,
             model,
             decoder,
             device=runtime_device,
@@ -703,6 +735,24 @@ def evaluate_latent_motion_checkpoint(
             disk_guard=guard,
         )
         direct_endpoint_previews = None
+        training_previews = _export_validation_previews(
+            runtime,
+            corpus,
+            training_selection[:preview_pairs],
+            model,
+            decoder,
+            output=stage / "training-previews",
+            device=runtime_device,
+            dtype=dtype,
+            autocast=autocast,
+            mean=mean,
+            std=std,
+            seed=seed,
+            inference_steps=checkpoint_config.inference_steps,
+            sampler_algorithm=checkpoint_config.sampler_algorithm,
+            disk_guard=guard,
+        )
+        training_direct_endpoint_previews = None
         if direct_endpoint_metrics is not None:
             direct_endpoint_previews = _export_validation_previews(
                 runtime,
@@ -711,6 +761,23 @@ def evaluate_latent_motion_checkpoint(
                 model,
                 decoder,
                 output=stage / "direct-endpoint-previews",
+                device=runtime_device,
+                dtype=dtype,
+                autocast=autocast,
+                mean=mean,
+                std=std,
+                seed=seed,
+                inference_steps=1,
+                sampler_algorithm="euler",
+                disk_guard=guard,
+            )
+            training_direct_endpoint_previews = _export_validation_previews(
+                runtime,
+                corpus,
+                training_selection[:preview_pairs],
+                model,
+                decoder,
+                output=stage / "training-direct-endpoint-previews",
                 device=runtime_device,
                 dtype=dtype,
                 autocast=autocast,
@@ -755,6 +822,41 @@ def evaluate_latent_motion_checkpoint(
                 for left, right in selection
             ],
             "previews": previews,
+            "training_distribution_control": {
+                "claim": (
+                    "exact training identities with target-distinct balanced action pairs; "
+                    "memorization/optimization evidence only"
+                ),
+                "direct_endpoint_control": (
+                    {
+                        "claim": (
+                            "same training requests, phases, order, and fixed noise; "
+                            "one-step t=1 endpoint diagnostic"
+                        ),
+                        "metrics": training_direct_endpoint_metrics,
+                        "previews": training_direct_endpoint_previews,
+                        "sampling": {"algorithm": "euler", "steps": 1},
+                    }
+                    if training_direct_endpoint_metrics is not None
+                    else None
+                ),
+                "metrics": training_metrics,
+                "pairs": [
+                    {
+                        "identity_id": corpus.rows[left].identity_id,
+                        "left_sequence_id": corpus.rows[left].sequence_id,
+                        "left_verb": corpus.rows[left].verb,
+                        "right_sequence_id": corpus.rows[right].sequence_id,
+                        "right_verb": corpus.rows[right].verb,
+                    }
+                    for left, right in training_selection
+                ],
+                "previews": training_previews,
+                "sampling": {
+                    "algorithm": checkpoint_config.sampler_algorithm,
+                    "steps": checkpoint_config.inference_steps,
+                },
+            },
             "runtime": _runtime_facts(runtime, runtime_device),
             "sampling": {
                 "algorithm": checkpoint_config.sampler_algorithm,
