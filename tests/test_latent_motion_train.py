@@ -9,6 +9,7 @@ from spritelab.latent_motion_train import (
     LatentMotionTrainingRow,
     _config_from_dict,
     _ema_update,
+    _paired_action_metrics,
     build_matched_action_index,
     sample_matched_action_pair,
 )
@@ -76,3 +77,36 @@ def test_zero_decay_ema_copies_raw_weights_during_warmup() -> None:
 
     assert torch.equal(ema.weight, raw.weight)
     assert torch.equal(ema.bias, raw.bias)
+
+
+def test_paired_action_metrics_reward_correct_and_causal_outputs() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 2, 4, 2, 2))
+    target[1] = 1
+    predicted = target.clone()
+    permuted = torch.flip(target, (0,))
+
+    metrics = _paired_action_metrics(
+        torch,
+        predicted_pm=predicted,
+        permuted_pm=permuted,
+        target_pm=target,
+    )
+
+    assert metrics["action_separation_ratio"].item() == pytest.approx(1)
+    assert metrics["action_correct_target_preference_rate"].item() == pytest.approx(1)
+    assert metrics["action_swap_moves_toward_replacement_rate"].item() == pytest.approx(1)
+    assert metrics["action_correct_target_margin"].item() == pytest.approx(1)
+
+
+def test_paired_action_metrics_reject_shape_mismatch() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 2, 4, 2, 2))
+
+    with pytest.raises(ValueError, match="share one shape"):
+        _paired_action_metrics(
+            torch,
+            predicted_pm=target[:1],
+            permuted_pm=target,
+            target_pm=target,
+        )

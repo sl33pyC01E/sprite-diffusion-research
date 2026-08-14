@@ -12,6 +12,7 @@ import shutil
 import tempfile
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Literal
 
@@ -467,7 +468,7 @@ def evaluate_latent_motion_checkpoint(
     output_directory: Path | str,
     *,
     expected_checkpoint_sha256: str,
-    maximum_test_pairs: int = 28,
+    maximum_test_pairs: int = 64,
     preview_pairs: int = 6,
     seed: int = 20260826,
     device: str = "cuda",
@@ -518,7 +519,7 @@ def evaluate_latent_motion_checkpoint(
         raise LatentMotionTrainingError("inference checkpoint model state differs") from error
     model.eval()
     decoder = _load_frozen_decoder(runtime, corpus, device=runtime_device)
-    selection = _matched_pairs(corpus, corpus.test_indices, maximum_test_pairs)
+    selection = _balanced_matched_pairs(corpus, corpus.test_indices, maximum_test_pairs)
     mean = runtime.tensor(corpus.channel_mean, device=runtime_device).view(1, 1, 8, 1, 1)
     std = runtime.tensor(corpus.channel_standard_deviation, device=runtime_device).view(
         1, 1, 8, 1, 1
@@ -579,7 +580,7 @@ def evaluate_latent_motion_checkpoint(
             ],
             "previews": previews,
             "runtime": _runtime_facts(runtime, runtime_device),
-            "schema_version": 1,
+            "schema_version": 2,
             "seed": seed,
         }
         payload = canonical_json_bytes(report)
@@ -877,6 +878,47 @@ def _matched_pairs(
     return tuple(output)
 
 
+def _balanced_matched_pairs(
+    corpus: LatentMotionTrainingCorpus,
+    indices: tuple[int, ...],
+    maximum_pairs: int,
+) -> tuple[tuple[int, int], ...]:
+    """Select action contrasts round-robin across identities.
+
+    Every multi-action identity contributes its first lexical action pair before
+    any identity contributes a second pair. This keeps broad held-out evidence
+    from being dominated by identities with unusually large action sets.
+    """
+
+    index = build_matched_action_index(corpus.rows, indices)
+    candidates = {
+        identity: tuple(
+            (verbs[left], verbs[right]) for left, right in combinations(range(len(verbs)), 2)
+        )
+        for identity, actions in index.items()
+        for verbs in (tuple(actions),)
+    }
+    output: list[tuple[int, int]] = []
+    round_index = 0
+    while len(output) < maximum_pairs:
+        appended = False
+        for identity in sorted(candidates, key=str.encode):
+            pairs = candidates[identity]
+            if round_index >= len(pairs):
+                continue
+            left_verb, right_verb = pairs[round_index]
+            output.append((index[identity][left_verb], index[identity][right_verb]))
+            appended = True
+            if len(output) == maximum_pairs:
+                break
+        if not appended:
+            break
+        round_index += 1
+    if not output:
+        raise LatentMotionTrainingError("split has no matched action pairs")
+    return tuple(output)
+
+
 def _validate(
     runtime: Any,
     corpus: LatentMotionTrainingCorpus,
@@ -917,16 +959,29 @@ def _validate(
                     permuted.float(), target_velocity.float()
                 )
                 generated = (reference.unsqueeze(1) + noise - correct) * std + mean
+                generated_permuted = (reference.unsqueeze(1) + noise - permuted) * std + mean
                 logits = decoder.decode_logits(generated.reshape(-1, 8, 64, 64))
+                permuted_logits = decoder.decode_logits(generated_permuted.reshape(-1, 8, 64, 64))
                 reconstruction = sprite_reconstruction_loss(logits, target_rgba)
             predicted_rgba = runtime.sigmoid(logits.float()).reshape(2, 8, 4, 128, 128)
+            permuted_rgba = runtime.sigmoid(permuted_logits.float()).reshape(2, 8, 4, 128, 128)
             target_5d = target_rgba.reshape(2, 8, 4, 128, 128)
             predicted_alpha = predicted_rgba[:, :, 3:4]
             target_alpha = target_5d[:, :, 3:4]
             predicted_pm = runtime.cat(
                 (predicted_rgba[:, :, :3] * predicted_alpha, predicted_alpha), dim=2
             )
+            permuted_alpha = permuted_rgba[:, :, 3:4]
+            permuted_pm = runtime.cat(
+                (permuted_rgba[:, :, :3] * permuted_alpha, permuted_alpha), dim=2
+            )
             target_pm = runtime.cat((target_5d[:, :, :3] * target_alpha, target_alpha), dim=2)
+            causal = _paired_action_metrics(
+                runtime,
+                predicted_pm=predicted_pm,
+                permuted_pm=permuted_pm,
+                target_pm=target_pm,
+            )
             intersection = ((predicted_alpha >= 0.5) & (target_alpha >= 0.5)).sum()
             union = ((predicted_alpha >= 0.5) | (target_alpha >= 0.5)).sum().clamp_min(1)
             temporal = runtime.nn.functional.l1_loss(
@@ -941,6 +996,8 @@ def _validate(
             totals["alpha_iou_127"] += float((intersection / union).cpu())
             totals["temporal_delta_mae"] += float(temporal.cpu())
             totals["decoder_reconstruction_loss"] += float(reconstruction.total.cpu())
+            for key, value in causal.items():
+                totals[key] += float(value.cpu())
     model.train()
     count = len(selection)
     output = {key: value / count for key, value in totals.items()}
@@ -948,6 +1005,49 @@ def _validate(
         output["action_permuted_mse"] - output["latent_endpoint_mse"]
     )
     return output
+
+
+def _paired_action_metrics(
+    runtime: Any,
+    *,
+    predicted_pm: Any,
+    permuted_pm: Any,
+    target_pm: Any,
+) -> dict[str, Any]:
+    """Measure two-action separation and directed action-token substitution."""
+
+    expected = tuple(target_pm.shape)
+    if len(expected) != 5 or expected[0] != 2:
+        raise ValueError("paired action tensors must have shape [2,T,C,H,W]")
+    if tuple(predicted_pm.shape) != expected or tuple(permuted_pm.shape) != expected:
+        raise ValueError("paired action tensors must share one shape")
+    target_distance = runtime.nn.functional.l1_loss(target_pm[0], target_pm[1])
+    generated_distance = runtime.nn.functional.l1_loss(predicted_pm[0], predicted_pm[1])
+    separation_ratio = generated_distance / target_distance.clamp_min(1e-8)
+    correct_preference = []
+    replacement_movement = []
+    margins = []
+    for offset, replacement in ((0, 1), (1, 0)):
+        correct_error = runtime.nn.functional.l1_loss(predicted_pm[offset], target_pm[offset])
+        alternate_error = runtime.nn.functional.l1_loss(
+            predicted_pm[offset], target_pm[replacement]
+        )
+        swapped_replacement_error = runtime.nn.functional.l1_loss(
+            permuted_pm[offset], target_pm[replacement]
+        )
+        correct_preference.append((correct_error < alternate_error).to(runtime.float32))
+        replacement_movement.append(
+            (swapped_replacement_error < alternate_error).to(runtime.float32)
+        )
+        margins.append(alternate_error - correct_error)
+    return {
+        "action_separation_ratio": separation_ratio,
+        "action_correct_target_preference_rate": runtime.stack(correct_preference).mean(),
+        "action_swap_moves_toward_replacement_rate": runtime.stack(replacement_movement).mean(),
+        "action_correct_target_margin": runtime.stack(margins).mean(),
+        "target_action_distance": target_distance,
+        "generated_action_distance": generated_distance,
+    }
 
 
 def _export_validation_previews(
