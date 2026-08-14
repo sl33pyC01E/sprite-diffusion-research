@@ -665,6 +665,10 @@ Checkpoint evaluation additionally separates target-foreground error from transp
 canvas error, reports alpha precision, recall, and occupancy, and emits a
 premultiplied-RGBA error for every represented verb. This prevents background area or
 an easy action from masking weak sprite or action fidelity in the aggregate score.
+For uniform-flow checkpoints, the external evaluator also publishes a matched
+one-step `t=1` endpoint control beside the configured multi-step trajectory. Both
+reuse the exact request order, phases, and fixed noise, so the comparison isolates
+sampler/trajectory behavior rather than a different input batch.
 Each gallery row now binds three matched animations with exact paths and hashes: the
 authored target, the requested-action output, and an action-token-substituted output
 generated from the same reference, frame phases, and noise. This makes directional

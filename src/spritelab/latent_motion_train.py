@@ -663,6 +663,23 @@ def evaluate_latent_motion_checkpoint(
         inference_steps=checkpoint_config.inference_steps,
         sampler_algorithm=checkpoint_config.sampler_algorithm,
     )
+    direct_endpoint_metrics = None
+    if checkpoint_config.time_sampling == "uniform":
+        direct_endpoint_metrics = _validate(
+            runtime,
+            corpus,
+            selection,
+            model,
+            decoder,
+            device=runtime_device,
+            dtype=dtype,
+            autocast=autocast,
+            mean=mean,
+            std=std,
+            seed=seed,
+            inference_steps=1,
+            sampler_algorithm="euler",
+        )
     guard = disk_guard or DiskGuard(output.parent, min_free_bytes=100 * 1024**3)
     guard.require_capacity(512 * 1024**2, label="latent-motion test evaluation")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -685,6 +702,25 @@ def evaluate_latent_motion_checkpoint(
             sampler_algorithm=checkpoint_config.sampler_algorithm,
             disk_guard=guard,
         )
+        direct_endpoint_previews = None
+        if direct_endpoint_metrics is not None:
+            direct_endpoint_previews = _export_validation_previews(
+                runtime,
+                corpus,
+                selection[:preview_pairs],
+                model,
+                decoder,
+                output=stage / "direct-endpoint-previews",
+                device=runtime_device,
+                dtype=dtype,
+                autocast=autocast,
+                mean=mean,
+                std=std,
+                seed=seed,
+                inference_steps=1,
+                sampler_algorithm="euler",
+                disk_guard=guard,
+            )
         report = {
             "artifact_kind": "mugen_reference_latent_motion_test_evaluation",
             "checkpoint": {
@@ -694,6 +730,19 @@ def evaluate_latent_motion_checkpoint(
             },
             "claim": "untouched identity-disjoint test pairs; no open-domain generalization claim",
             "corpus": corpus.contract,
+            "direct_endpoint_control": (
+                {
+                    "claim": (
+                        "same checkpoint, requests, phases, order, and fixed noise; "
+                        "one-step t=1 endpoint diagnostic"
+                    ),
+                    "metrics": direct_endpoint_metrics,
+                    "previews": direct_endpoint_previews,
+                    "sampling": {"algorithm": "euler", "steps": 1},
+                }
+                if direct_endpoint_metrics is not None
+                else None
+            ),
             "metrics": metrics,
             "pairs": [
                 {
