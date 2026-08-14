@@ -84,7 +84,7 @@ def main() -> None:
     _verify_source_index(CONTROL, CONTROL_SOURCE_INDEX_SHA256)
     if _file_sha256(STILL_CHECKPOINT) != STILL_CHECKPOINT_SHA256:
         raise RuntimeError("MUGEN still-LoRA checkpoint differs")
-    dtype = torch.float16
+    dtype = torch.bfloat16 if config.get("precision") == "bfloat16" else torch.float16
     base_unet = UNet2DConditionModel.from_pretrained(
         BASE / "unet", local_files_only=True, torch_dtype=dtype
     )
