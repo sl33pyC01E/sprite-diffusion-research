@@ -9,6 +9,7 @@ import pytest
 
 from spritelab.mugen_stream_quality import (
     MugenStreamQualityPolicy,
+    _medoid_frame_index,
     build_mugen_stream_quality_audit,
     export_mugen_stream_quality_audit,
 )
@@ -71,6 +72,19 @@ def test_quality_audit_verifies_arrays_and_builds_dense_tier(tmp_path: Path) -> 
     idle = next(row for row in audit["quality_rows"][0]["clip_metrics"] if row["slot"] == "idle")
     assert idle["medoid_frame_index"] == 0
     assert idle["medoid_frame_array_content_sha256"] == idle["frame_array_content_sha256"][0]
+
+
+def test_medoid_pairwise_optimization_is_exact() -> None:
+    value = np.random.default_rng(20260814).integers(0, 256, size=(8, 13, 11, 4), dtype=np.uint8)
+    rgba = value.astype(np.int64)
+    alpha = rgba[..., 3:4]
+    premultiplied = np.concatenate((rgba[..., :3] * alpha, alpha * 255), axis=-1)
+    reference_scores = [
+        int(np.abs(premultiplied[index : index + 1] - premultiplied).sum()) for index in range(8)
+    ]
+    expected = min(range(8), key=lambda index: (reference_scores[index], index))
+
+    assert _medoid_frame_index(value) == expected
 
 
 def test_quality_audit_retains_broad_character_with_explicit_dense_reason(

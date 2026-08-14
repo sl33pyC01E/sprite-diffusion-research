@@ -279,12 +279,18 @@ def _distribution(values: list[float]) -> dict[str, float | int | None]:
 
 
 def _medoid_frame_index(value: np.ndarray) -> int:
-    rgba = value.astype(np.int64)
+    rgba = value.astype(np.uint16)
     alpha = rgba[..., 3:4]
     premultiplied = np.concatenate((rgba[..., :3] * alpha, alpha * 255), axis=-1)
-    scores = []
-    for index in range(value.shape[0]):
-        scores.append(int(np.abs(premultiplied[index : index + 1] - premultiplied).sum()))
+    scores = [0] * value.shape[0]
+    for left in range(value.shape[0]):
+        left_frame = premultiplied[left].astype(np.int32)
+        for right in range(left + 1, value.shape[0]):
+            distance = int(
+                np.abs(left_frame - premultiplied[right].astype(np.int32)).sum(dtype=np.int64)
+            )
+            scores[left] += distance
+            scores[right] += distance
     return min(range(len(scores)), key=lambda index: (scores[index], index))
 
 
