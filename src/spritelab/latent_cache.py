@@ -61,7 +61,13 @@ def export_mugen_latent_cache(
         raise LatentCacheError("autoencoder checkpoint must contain a dictionary")
     if checkpoint.get("artifact_kind") != "sprite_rgba_autoencoder_resume_checkpoint":
         raise LatentCacheError("autoencoder checkpoint has the wrong artifact kind")
-    if checkpoint.get("schema_version") != 1 or checkpoint.get("step") != 10_000:
+    checkpoint_step = checkpoint.get("step")
+    if (
+        checkpoint.get("schema_version") != 1
+        or isinstance(checkpoint_step, bool)
+        or not isinstance(checkpoint_step, int)
+        or checkpoint_step <= 0
+    ):
         raise LatentCacheError("autoencoder checkpoint version/step is unsupported")
     config_record = checkpoint.get("config")
     ema = checkpoint.get("ema")
