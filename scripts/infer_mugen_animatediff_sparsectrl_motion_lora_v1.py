@@ -248,6 +248,10 @@ def main() -> None:
         generated_stack = np.stack(generated_arrays).astype(np.float32) / 255
         target_stack = np.stack(target_arrays).astype(np.float32) / 255
         per_sample_mae = np.abs(generated_stack - target_stack).mean(axis=(1, 2, 3, 4))
+        cross_mae = np.abs(generated_stack[:, None] - target_stack[None, :]).mean(axis=(2, 3, 4, 5))
+        own_target_ranks = np.argsort(np.argsort(cross_mae, axis=1), axis=1).diagonal() + 1
+        generated_pairwise = _mean_pairwise_mae(generated_stack)
+        target_pairwise = _mean_pairwise_mae(target_stack)
         report = {
             "artifact_kind": "mugen_animatediff_sparsectrl_temporal_lora_evaluation",
             "claim": (
@@ -269,11 +273,22 @@ def main() -> None:
                 "seed": args.seed,
             },
             "metrics": {
+                "generated_action_pairwise_rgb_mae": generated_pairwise,
+                "generated_to_target_action_separation_ratio": (
+                    generated_pairwise / target_pairwise if target_pairwise else None
+                ),
                 "mean_rgb_mae": float(per_sample_mae.mean()),
+                "own_target_nearest_count": int((own_target_ranks == 1).sum()),
+                "own_target_nearest_denominator": len(rows),
+                "own_target_ranks": {
+                    row["sequence_id"]: int(rank)
+                    for row, rank in zip(rows, own_target_ranks, strict=True)
+                },
                 "per_sequence_rgb_mae": {
                     row["sequence_id"]: float(value)
                     for row, value in zip(rows, per_sample_mae, strict=True)
                 },
+                "target_action_pairwise_rgb_mae": target_pairwise,
             },
             "samples": sample_records,
             "schema_version": 1,
@@ -415,6 +430,15 @@ def _array_sha256(value: np.ndarray) -> str:
     digest.update(b"\0")
     digest.update(memoryview(contiguous).cast("B"))
     return digest.hexdigest()
+
+
+def _mean_pairwise_mae(value: np.ndarray) -> float:
+    distances = [
+        float(np.abs(value[left] - value[right]).mean())
+        for left in range(len(value))
+        for right in range(left + 1, len(value))
+    ]
+    return float(np.mean(distances)) if distances else 0.0
 
 
 def _canonical_json(value: object) -> bytes:
