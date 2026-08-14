@@ -29,6 +29,7 @@ LORA_WEIGHT_NAME = os.environ.get(
 )
 TRAINING_STEPS = int(os.environ.get("SPRITELAB_COGVIDEOX_TRAINING_STEPS", "250"))
 LORA_SCALE = float(os.environ.get("SPRITELAB_COGVIDEOX_LORA_SCALE", "1.0"))
+VERB = os.environ.get("SPRITELAB_COGVIDEOX_VERB", "normal_attack")
 TRAIN_LOG = ROOT / "lora-orange-fighter-native-caption-r128-step250-v2.log"
 OUTPUT = Path(
     os.environ.get(
@@ -59,16 +60,16 @@ def main() -> None:
     if hashlib.sha256(dataset_bytes).hexdigest() != DATASET_MANIFEST_SHA256:
         raise RuntimeError("CogVideoX MUGEN dataset differs")
     dataset = json.loads(dataset_bytes)
-    candidates = [record for record in dataset["records"] if record["verb"] == "normal_attack"]
+    candidates = [record for record in dataset["records"] if record["verb"] == VERB]
     if len(candidates) != 1:
-        raise RuntimeError("normal-attack record cardinality differs")
+        raise RuntimeError(f"{VERB} record cardinality differs")
     record = candidates[0]
     target_path = DATASET / record["video"]["path"]
     if file_sha256(target_path) != record["video"]["file_sha256"]:
-        raise RuntimeError("normal-attack video hash differs")
+        raise RuntimeError(f"{VERB} video hash differs")
     target = decode_video(target_path)
     if target.shape != (9, 480, 720, 3):
-        raise RuntimeError("normal-attack target geometry differs")
+        raise RuntimeError(f"{VERB} target geometry differs")
     conditioning = Image.fromarray(target[0], mode="RGB")
 
     weights_path = LORA / LORA_WEIGHT_NAME
