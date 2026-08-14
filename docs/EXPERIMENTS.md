@@ -741,3 +741,36 @@ SD renderer as the next quality path. Both the low-rank and full-motion versions
 fail an in-sample, one-identity gate, so longer broad training is not authorized.
 The next pretrained probe uses a native text-plus-image-to-video transformer rather
 than trying to turn a text-to-video/sparse-control stack into one.
+
+### CogVideoX native I2V probe and LoRA gate
+
+The next branch pins `THUDM/CogVideoX-5b-I2V` at revision
+`a6f0f4858a8395e7429d82493864ce92bf73af11`. Every local model payload was
+verified against both its byte count and the upstream Git-LFS SHA-256. The final
+22-file source index covers 21,638,303,185 bytes and has SHA-256
+`98fbc592f23269a38d039d16f969844a9da073b56b24567772433d4b02e2f831`.
+Several initially right-sized downloads had incorrect content; those bytes were
+quarantined and repaired before any successful inference claim.
+
+The zero-shot probe conditions on the exact frame zero of the ten-action orange
+fighter and asks for a normal light attack. CogVideoX requires a 720x480 canvas,
+so the exact 480x480 nearest-neighbor sprite image is padded by 120 RGB-127 pixels
+on each horizontal side without scaling. It uses nine frames, 50 steps, guidance
+6, dynamic CFG, and seed `20260830`. The report SHA-256 is
+`0e6d4673783d3a21055d0b9cad08448d3cf790b55062ab797d6e816c05575dca`;
+the display sheet SHA-256 is
+`0ca2bb9316ded955d16bbcab3dce031373fb8367f75e63a81588edc776bd210b`.
+The model preserves the initial fighter briefly, then expands it into a luminous,
+spatially incoherent smear. Zero-shot CogVideoX is therefore not a quality pass.
+
+The fine-tuning gate uses ten lossless nine-frame videos from one fighter, one per
+canonical verb. Frame zero is the same exact idle reference and frames one through
+eight are the exact action target. The native 720x480 projection pads the verified
+480x480 nearest-neighbor sprite canvas without interpolation; its manifest SHA-256
+is `10acd3a3a46f70985814a5ade39c908789b4d79dff21f1f871ce1d0c4ac009fb`.
+An official Diffusers I2V LoRA smoke completed one real optimizer step at rank 32
+with loss `0.207`; its adapter SHA-256 is
+`012ed559c3ea20be72c082bbe744c6d601a6b90df34acee29ee16f684bb394f3`.
+This proves only dataset/trainer/memory wiring. The rank-128 quality gate must still
+demonstrate visible identity preservation and verb-specific motion before any
+broad MUGEN fine-tune is authorized.
