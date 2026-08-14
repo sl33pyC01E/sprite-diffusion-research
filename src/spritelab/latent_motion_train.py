@@ -43,6 +43,8 @@ else:
     _TORCH_IMPORT_ERROR = None
 
 Precision = Literal["float32", "bfloat16"]
+TimeSampling = Literal["endpoint", "uniform"]
+FlowSampler = Literal["euler", "heun"]
 
 
 class LatentMotionTrainingError(ValueError):
@@ -62,6 +64,10 @@ class LatentMotionTrainingConfig:
     ema_decay: float = 0.9995
     latent_endpoint_weight: float = 1.0
     pixel_endpoint_weight: float = 1.0
+    time_sampling: TimeSampling = "endpoint"
+    endpoint_sample_probability: float = 0.0
+    inference_steps: int = 1
+    sampler_algorithm: FlowSampler = "euler"
     steps: int = 15_000
     log_every: int = 25
     validate_every: int = 500
@@ -85,6 +91,7 @@ class LatentMotionTrainingConfig:
     def __post_init__(self) -> None:
         for name in (
             "gradient_accumulation",
+            "inference_steps",
             "steps",
             "log_every",
             "validate_every",
@@ -109,6 +116,7 @@ class LatentMotionTrainingConfig:
             "weight_decay",
             "latent_endpoint_weight",
             "pixel_endpoint_weight",
+            "endpoint_sample_probability",
         ):
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
@@ -116,7 +124,21 @@ class LatentMotionTrainingConfig:
         if self.minimum_learning_rate > self.learning_rate:
             raise ValueError("minimum_learning_rate cannot exceed learning_rate")
         if self.latent_endpoint_weight == 0 and self.pixel_endpoint_weight == 0:
-            raise ValueError("at least one endpoint objective must be positive")
+            raise ValueError("at least one denoising objective must be positive")
+        if self.endpoint_sample_probability > 1:
+            raise ValueError("endpoint_sample_probability must be in [0,1]")
+        if self.time_sampling not in {"endpoint", "uniform"}:
+            raise ValueError("time_sampling must be endpoint or uniform")
+        if self.sampler_algorithm not in {"euler", "heun"}:
+            raise ValueError("sampler_algorithm must be euler or heun")
+        if self.time_sampling == "endpoint" and (
+            self.endpoint_sample_probability != 0
+            or self.inference_steps != 1
+            or self.sampler_algorithm != "euler"
+        ):
+            raise ValueError("endpoint training requires its one-step endpoint sampler")
+        if self.time_sampling == "uniform" and self.inference_steps < 2:
+            raise ValueError("uniform flow training requires at least two inference steps")
         if not math.isfinite(self.ema_decay) or not 0 <= self.ema_decay < 1:
             raise ValueError("ema_decay must be in [0,1)")
         if self.device not in {"cpu", "cuda"}:
@@ -229,6 +251,95 @@ def sample_matched_action_pair(
     verbs = tuple(index[identity])
     order = runtime.randperm(len(verbs), generator=generator)[:2].tolist()
     return index[identity][verbs[order[0]]], index[identity][verbs[order[1]]]
+
+
+def _target_distinct_pairs_from_index(
+    index: dict[str, dict[str, int]], target_digests: dict[int, str]
+) -> dict[str, tuple[tuple[int, int], ...]]:
+    """Keep named action contrasts only when their exact target tensors differ."""
+
+    output = {}
+    for identity, actions in index.items():
+        verbs = tuple(actions)
+        pairs = tuple(
+            (actions[verbs[left]], actions[verbs[right]])
+            for left, right in combinations(range(len(verbs)), 2)
+            if target_digests[actions[verbs[left]]] != target_digests[actions[verbs[right]]]
+        )
+        if pairs:
+            output[identity] = pairs
+    return output
+
+
+def _sample_target_distinct_pair(
+    pairs: dict[str, tuple[tuple[int, int], ...]], *, generator: Any
+) -> tuple[int, int]:
+    runtime = _require_torch()
+    if not pairs:
+        raise ValueError("target-distinct pair index cannot be empty")
+    identities = tuple(pairs)
+    identity = identities[int(runtime.randint(len(identities), (1,), generator=generator))]
+    candidates = pairs[identity]
+    return candidates[int(runtime.randint(len(candidates), (1,), generator=generator))]
+
+
+def _sample_training_times(
+    runtime: Any,
+    *,
+    batch: int,
+    config: LatentMotionTrainingConfig,
+    device: Any,
+    generator: Any,
+) -> Any:
+    """Sample one shared noise level for a matched causal action pair."""
+
+    if config.time_sampling == "endpoint":
+        return runtime.ones((batch,), device=device)
+    sampled = runtime.rand((1,), device=device, generator=generator)
+    if config.endpoint_sample_probability:
+        choose_endpoint = runtime.rand((1,), device=device, generator=generator)
+        sampled = runtime.where(choose_endpoint < config.endpoint_sample_probability, 1, sampled)
+    return sampled.expand(batch)
+
+
+def _sample_motion_residual(
+    runtime: Any,
+    model: Any,
+    *,
+    noise: Any,
+    reference: Any,
+    actions: Any,
+    phases: Any,
+    inference_steps: int,
+    sampler_algorithm: FlowSampler,
+) -> Any:
+    """Integrate the learned clean-to-noise velocity field from t=1 to t=0."""
+
+    if inference_steps <= 0:
+        raise ValueError("inference_steps must be positive")
+    if sampler_algorithm not in {"euler", "heun"}:
+        raise ValueError("sampler_algorithm must be euler or heun")
+    state = noise
+    batch = int(noise.shape[0])
+    step_size = -1.0 / inference_steps
+    for step in range(inference_steps):
+        time_value = 1.0 - step / inference_steps
+        times = runtime.full((batch,), time_value, device=noise.device)
+        velocity = model(state, reference, times, actions, frame_phase=phases)
+        proposal = state + step_size * velocity
+        if sampler_algorithm == "heun" and step + 1 < inference_steps:
+            next_times = runtime.full((batch,), time_value + step_size, device=noise.device)
+            next_velocity = model(
+                proposal,
+                reference,
+                next_times,
+                actions,
+                frame_phase=phases,
+            )
+            state = state + 0.5 * step_size * (velocity + next_velocity)
+        else:
+            state = proposal
+    return state
 
 
 def load_latent_motion_training_corpus(
@@ -423,6 +534,8 @@ def run_latent_motion_training(
     config: LatentMotionTrainingConfig | None = None,
     resume_checkpoint_path: Path | str | None = None,
     expected_resume_sha256: str | None = None,
+    warm_start_checkpoint_path: Path | str | None = None,
+    expected_warm_start_sha256: str | None = None,
     disk_guard: DiskGuard | None = None,
 ) -> LatentMotionTrainingResult:
     """Train a no-clobber, resumable, held-out-identity motion model."""
@@ -434,6 +547,10 @@ def run_latent_motion_training(
         raise FileExistsError(f"Refusing to replace latent-motion output: {output}")
     if (resume_checkpoint_path is None) != (expected_resume_sha256 is None):
         raise ValueError("resume checkpoint and expected SHA-256 must be supplied together")
+    if (warm_start_checkpoint_path is None) != (expected_warm_start_sha256 is None):
+        raise ValueError("warm-start checkpoint and expected SHA-256 must be supplied together")
+    if resume_checkpoint_path is not None and warm_start_checkpoint_path is not None:
+        raise ValueError("resume and warm-start checkpoints are mutually exclusive")
     device = runtime.device(experiment.device)
     if device.type == "cuda" and not runtime.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
@@ -458,6 +575,12 @@ def run_latent_motion_training(
                 else None
             ),
             expected_resume_sha256=expected_resume_sha256,
+            warm_start_checkpoint_path=(
+                Path(warm_start_checkpoint_path).resolve()
+                if warm_start_checkpoint_path is not None
+                else None
+            ),
+            expected_warm_start_sha256=expected_warm_start_sha256,
             disk_guard=guard,
         )
 
@@ -535,6 +658,8 @@ def evaluate_latent_motion_checkpoint(
         mean=mean,
         std=std,
         seed=seed,
+        inference_steps=checkpoint_config.inference_steps,
+        sampler_algorithm=checkpoint_config.sampler_algorithm,
     )
     guard = disk_guard or DiskGuard(output.parent, min_free_bytes=100 * 1024**3)
     guard.require_capacity(512 * 1024**2, label="latent-motion test evaluation")
@@ -554,6 +679,8 @@ def evaluate_latent_motion_checkpoint(
             mean=mean,
             std=std,
             seed=seed,
+            inference_steps=checkpoint_config.inference_steps,
+            sampler_algorithm=checkpoint_config.sampler_algorithm,
             disk_guard=guard,
         )
         report = {
@@ -578,6 +705,10 @@ def evaluate_latent_motion_checkpoint(
             ],
             "previews": previews,
             "runtime": _runtime_facts(runtime, runtime_device),
+            "sampling": {
+                "algorithm": checkpoint_config.sampler_algorithm,
+                "steps": checkpoint_config.inference_steps,
+            },
             "schema_version": 2,
             "seed": seed,
         }
@@ -626,6 +757,8 @@ def _train(
     device: Any,
     resume_checkpoint_path: Path | None,
     expected_resume_sha256: str | None,
+    warm_start_checkpoint_path: Path | None,
+    expected_warm_start_sha256: str | None,
     disk_guard: DiskGuard,
 ) -> LatentMotionTrainingResult:
     runtime.manual_seed(config.seed)
@@ -665,11 +798,32 @@ def _train(
         if device.type == "cuda":
             runtime.cuda.set_rng_state(parent["rng_state"]["cuda"], device=device)
         lineage = {
+            "initialization": "exact_resume_with_optimizer_and_rng",
             "parent_checkpoint_path": str(resume_checkpoint_path),
             "parent_checkpoint_sha256": expected_resume_sha256,
             "parent_step": start_step,
         }
+    elif warm_start_checkpoint_path is not None:
+        assert expected_warm_start_sha256 is not None
+        parent = _load_warm_start(
+            runtime,
+            warm_start_checkpoint_path,
+            expected_sha256=expected_warm_start_sha256,
+            corpus=corpus,
+            config=config,
+        )
+        model.load_state_dict(parent["ema_model"], strict=True)
+        ema.load_state_dict(parent["ema_model"], strict=True)
+        lineage = {
+            "initialization": "ema_weights_only_fresh_optimizer_and_rng",
+            "parent_checkpoint_path": str(warm_start_checkpoint_path),
+            "parent_checkpoint_sha256": expected_warm_start_sha256,
+            "parent_step": int(parent["step"]),
+        }
     train_index = build_matched_action_index(corpus.rows, corpus.train_indices)
+    train_pairs = _target_distinct_pairs_from_index(
+        train_index, _target_rgba_digests(corpus, corpus.train_indices)
+    )
     validation_selection = _validation_pairs(corpus, config.validation_pairs)
     mean = runtime.tensor(corpus.channel_mean, device=device).view(1, 1, 8, 1, 1)
     std = runtime.tensor(corpus.channel_standard_deviation, device=device).view(1, 1, 8, 1, 1)
@@ -687,7 +841,7 @@ def _train(
         accumulated_pixel = 0.0
         accumulated_loss = 0.0
         for _ in range(config.gradient_accumulation):
-            selection = sample_matched_action_pair(train_index, generator=sampler_generator)
+            selection = _sample_target_distinct_pair(train_pairs, generator=sampler_generator)
             target, reference, target_rgba, phases, actions = _batch(
                 runtime, corpus, selection, device=device, mean=mean, std=std
             )
@@ -695,10 +849,18 @@ def _train(
             shared_noise = runtime.randn(
                 (1, *clean.shape[1:]), device=device, generator=noise_generator
             ).expand_as(clean)
-            times = runtime.ones((2,), device=device)
+            times = _sample_training_times(
+                runtime,
+                batch=2,
+                config=config,
+                device=device,
+                generator=noise_generator,
+            )
+            time_view = times.view(2, 1, 1, 1, 1)
+            noisy = (1 - time_view) * clean + time_view * shared_noise
             with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
                 predicted = model(
-                    shared_noise,
+                    noisy,
                     reference,
                     times,
                     actions,
@@ -707,7 +869,7 @@ def _train(
                 latent_loss = runtime.nn.functional.mse_loss(
                     predicted.float(), (shared_noise - clean).float()
                 )
-                generated_residual = shared_noise - predicted
+                generated_residual = noisy - time_view * predicted
                 generated_latent = (reference.unsqueeze(1) + generated_residual) * std + mean
                 logits = decoder.decode_logits(generated_latent.reshape(-1, 8, 64, 64))
                 pixel_loss = sprite_reconstruction_loss(logits, target_rgba).total
@@ -747,6 +909,8 @@ def _train(
                 mean=mean,
                 std=std,
                 seed=config.seed + 20_000,
+                inference_steps=config.inference_steps,
+                sampler_algorithm=config.sampler_algorithm,
             )
         if step == 1 or step % config.log_every == 0 or step == config.steps:
             row = {
@@ -811,6 +975,8 @@ def _train(
         mean=mean,
         std=std,
         seed=config.seed + 20_000,
+        inference_steps=config.inference_steps,
+        sampler_algorithm=config.sampler_algorithm,
         disk_guard=disk_guard,
     )
     report = {
@@ -887,10 +1053,14 @@ def _matched_pairs(
     maximum_pairs: int,
 ) -> tuple[tuple[int, int], ...]:
     index = build_matched_action_index(corpus.rows, indices)
+    digests = _target_rgba_digests(corpus, indices)
+    distinct = _target_distinct_pairs_from_index(index, digests)
     output = []
     for identity in sorted(index, key=str.encode):
-        verbs = tuple(index[identity])
-        output.append((index[identity][verbs[0]], index[identity][verbs[1]]))
+        candidates = distinct.get(identity)
+        if not candidates:
+            continue
+        output.append(candidates[0])
         if len(output) == maximum_pairs:
             break
     if not output:
@@ -911,11 +1081,18 @@ def _balanced_matched_pairs(
     """
 
     index = build_matched_action_index(corpus.rows, indices)
-    return _balanced_pairs_from_index(index, maximum_pairs)
+    return _balanced_pairs_from_index(
+        index,
+        maximum_pairs,
+        target_digests=_target_rgba_digests(corpus, indices),
+    )
 
 
 def _balanced_pairs_from_index(
-    index: dict[str, dict[str, int]], maximum_pairs: int
+    index: dict[str, dict[str, int]],
+    maximum_pairs: int,
+    *,
+    target_digests: dict[int, str] | None = None,
 ) -> tuple[tuple[int, int], ...]:
     if isinstance(maximum_pairs, bool) or not isinstance(maximum_pairs, int):
         raise ValueError("maximum_pairs must be an integer")
@@ -928,6 +1105,10 @@ def _balanced_pairs_from_index(
         identity_candidates = []
         for left, right in combinations(range(len(verbs)), 2):
             left_verb, right_verb = verbs[left], verbs[right]
+            if target_digests is not None and (
+                target_digests[actions[left_verb]] == target_digests[actions[right_verb]]
+            ):
+                continue
             identity_candidates.append(
                 (left_verb, right_verb, actions[left_verb], actions[right_verb])
             )
@@ -976,6 +1157,12 @@ def _balanced_pairs_from_index(
     return tuple(output)
 
 
+def _target_rgba_digests(
+    corpus: LatentMotionTrainingCorpus, indices: tuple[int, ...]
+) -> dict[int, str]:
+    return {index: _array_sha256(corpus.target_rgba[index]) for index in indices}
+
+
 def _validate(
     runtime: Any,
     corpus: LatentMotionTrainingCorpus,
@@ -989,6 +1176,8 @@ def _validate(
     mean: Any,
     std: Any,
     seed: int,
+    inference_steps: int,
+    sampler_algorithm: FlowSampler,
 ) -> dict[str, float]:
     model.eval()
     totals: defaultdict[str, float] = defaultdict(float)
@@ -1002,21 +1191,49 @@ def _validate(
             noise = runtime.randn(
                 (1, *clean.shape[1:]), device=device, generator=generator
             ).expand_as(clean)
-            times = runtime.ones((2,), device=device)
             with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
-                correct = model(noise, reference, times, actions, frame_phase=phases)
-                permuted = model(
-                    noise, reference, times, runtime.flip(actions, (0,)), frame_phase=phases
+                endpoint_times = runtime.ones((2,), device=device)
+                correct_endpoint = model(
+                    noise, reference, endpoint_times, actions, frame_phase=phases
+                )
+                permuted_endpoint = model(
+                    noise,
+                    reference,
+                    endpoint_times,
+                    runtime.flip(actions, (0,)),
+                    frame_phase=phases,
                 )
                 target_velocity = noise - clean
                 correct_mse = runtime.nn.functional.mse_loss(
-                    correct.float(), target_velocity.float()
+                    correct_endpoint.float(), target_velocity.float()
                 )
                 permuted_mse = runtime.nn.functional.mse_loss(
-                    permuted.float(), target_velocity.float()
+                    permuted_endpoint.float(), target_velocity.float()
                 )
-                generated = (reference.unsqueeze(1) + noise - correct) * std + mean
-                generated_permuted = (reference.unsqueeze(1) + noise - permuted) * std + mean
+                generated_residual = _sample_motion_residual(
+                    runtime,
+                    model,
+                    noise=noise,
+                    reference=reference,
+                    actions=actions,
+                    phases=phases,
+                    inference_steps=inference_steps,
+                    sampler_algorithm=sampler_algorithm,
+                )
+                generated_permuted_residual = _sample_motion_residual(
+                    runtime,
+                    model,
+                    noise=noise,
+                    reference=reference,
+                    actions=runtime.flip(actions, (0,)),
+                    phases=phases,
+                    inference_steps=inference_steps,
+                    sampler_algorithm=sampler_algorithm,
+                )
+                generated = (reference.unsqueeze(1) + generated_residual) * std + mean
+                generated_permuted = (
+                    reference.unsqueeze(1) + generated_permuted_residual
+                ) * std + mean
                 logits = decoder.decode_logits(generated.reshape(-1, 8, 64, 64))
                 permuted_logits = decoder.decode_logits(generated_permuted.reshape(-1, 8, 64, 64))
                 reconstruction = sprite_reconstruction_loss(logits, target_rgba)
@@ -1121,6 +1338,8 @@ def _export_validation_previews(
     mean: Any,
     std: Any,
     seed: int,
+    inference_steps: int,
+    sampler_algorithm: FlowSampler,
     disk_guard: DiskGuard,
 ) -> list[dict[str, Any]]:
     rows = []
@@ -1135,14 +1354,17 @@ def _export_validation_previews(
                 (1, *target.shape[1:]), device=device, generator=generator
             ).expand_as(target)
             with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
-                predicted = model(
-                    noise,
-                    reference,
-                    runtime.ones((2,), device=device),
-                    actions,
-                    frame_phase=phases,
+                residual = _sample_motion_residual(
+                    runtime,
+                    model,
+                    noise=noise,
+                    reference=reference,
+                    actions=actions,
+                    phases=phases,
+                    inference_steps=inference_steps,
+                    sampler_algorithm=sampler_algorithm,
                 )
-                latent = (reference.unsqueeze(1) + noise - predicted) * std + mean
+                latent = (reference.unsqueeze(1) + residual) * std + mean
                 decoded = decoder.decode(latent.reshape(-1, 8, 64, 64)).clamp(0, 1)
             arrays = (
                 decoded.mul(255)
@@ -1268,6 +1490,37 @@ def _load_resume(
     for key, parent_value in parent_config.items():
         if key != "steps" and current.get(key) != parent_value:
             raise LatentMotionTrainingError(f"resume config differs at {key!r}")
+    return value
+
+
+def _load_warm_start(
+    runtime: Any,
+    path: Path,
+    *,
+    expected_sha256: str,
+    corpus: LatentMotionTrainingCorpus,
+    config: LatentMotionTrainingConfig,
+) -> dict[str, Any]:
+    """Load only compatible EMA weights; never inherit optimizer or RNG state."""
+
+    if _file_sha256(path) != expected_sha256:
+        raise LatentMotionTrainingError("warm-start checkpoint SHA-256 mismatch")
+    try:
+        value = runtime.load(path, map_location="cpu", weights_only=True)
+    except Exception as error:
+        raise LatentMotionTrainingError("warm-start checkpoint failed safe load") from error
+    artifact_kind = _ema_checkpoint_artifact_kind(value)
+    if value.get("corpus") != corpus.contract:
+        raise LatentMotionTrainingError("warm-start corpus contract differs")
+    if _checkpoint_action_vocabulary(value, artifact_kind) != list(corpus.action_vocabulary):
+        raise LatentMotionTrainingError("warm-start action vocabulary differs")
+    parent_config = _config_from_dict(value.get("config"))
+    if parent_config.model != config.model:
+        raise LatentMotionTrainingError("warm-start model architecture differs")
+    if not isinstance(value.get("step"), int) or value["step"] <= 0:
+        raise LatentMotionTrainingError("warm-start step is invalid")
+    if not isinstance(value.get("ema_model"), dict):
+        raise LatentMotionTrainingError("warm-start EMA state is missing")
     return value
 
 

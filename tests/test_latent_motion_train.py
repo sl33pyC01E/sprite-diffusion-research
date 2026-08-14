@@ -14,6 +14,10 @@ from spritelab.latent_motion_train import (
     _ema_checkpoint_artifact_kind,
     _ema_update,
     _paired_action_metrics,
+    _sample_motion_residual,
+    _sample_target_distinct_pair,
+    _sample_training_times,
+    _target_distinct_pairs_from_index,
     build_matched_action_index,
     sample_matched_action_pair,
 )
@@ -54,9 +58,80 @@ def test_matched_sampler_returns_same_identity_distinct_actions() -> None:
     assert rows[pair[0]].identity_id == rows[pair[1]].identity_id
 
 
-def test_config_requires_an_endpoint_objective() -> None:
-    with pytest.raises(ValueError, match="at least one endpoint objective"):
+def test_target_distinct_pairs_exclude_action_aliases() -> None:
+    torch = pytest.importorskip("torch")
+    index = {"a": {"idle": 0, "run": 1, "walk": 2}}
+    pairs = _target_distinct_pairs_from_index(index, {0: "idle", 1: "move", 2: "move"})
+
+    assert pairs == {"a": ((0, 1), (0, 2))}
+    sampled = _sample_target_distinct_pair(
+        pairs, generator=torch.Generator(device="cpu").manual_seed(3)
+    )
+    assert sampled in pairs["a"]
+
+
+def test_config_requires_a_denoising_objective() -> None:
+    with pytest.raises(ValueError, match="at least one denoising objective"):
         LatentMotionTrainingConfig(latent_endpoint_weight=0, pixel_endpoint_weight=0)
+
+
+def test_flow_config_requires_a_multistep_sampler() -> None:
+    with pytest.raises(ValueError, match="at least two inference steps"):
+        LatentMotionTrainingConfig(time_sampling="uniform")
+
+    config = LatentMotionTrainingConfig(
+        time_sampling="uniform",
+        endpoint_sample_probability=0.25,
+        inference_steps=8,
+        sampler_algorithm="heun",
+    )
+
+    assert config.inference_steps == 8
+
+
+def test_training_times_are_shared_across_a_matched_pair() -> None:
+    torch = pytest.importorskip("torch")
+    config = LatentMotionTrainingConfig(
+        time_sampling="uniform",
+        endpoint_sample_probability=0,
+        inference_steps=2,
+    )
+
+    times = _sample_training_times(
+        torch,
+        batch=2,
+        config=config,
+        device=torch.device("cpu"),
+        generator=torch.Generator(device="cpu").manual_seed(11),
+    )
+
+    assert times.shape == (2,)
+    assert times[0].item() == pytest.approx(times[1].item())
+    assert 0 <= times[0].item() < 1
+
+
+@pytest.mark.parametrize("algorithm", ["euler", "heun"])
+def test_rectified_flow_sampler_recovers_a_constant_velocity_path(algorithm: str) -> None:
+    torch = pytest.importorskip("torch")
+    noise = torch.ones((2, 1, 1, 1, 1))
+
+    class ConstantVelocity:
+        def __call__(self, state, reference, times, actions, *, frame_phase):
+            del reference, times, actions, frame_phase
+            return torch.ones_like(state)
+
+    result = _sample_motion_residual(
+        torch,
+        ConstantVelocity(),
+        noise=noise,
+        reference=torch.zeros((2, 1, 1, 1)),
+        actions=torch.zeros((2,), dtype=torch.long),
+        phases=torch.zeros((2, 1)),
+        inference_steps=4,
+        sampler_algorithm=algorithm,
+    )
+
+    assert torch.allclose(result, torch.zeros_like(noise))
 
 
 def test_checkpoint_config_round_trips_nested_model() -> None:
