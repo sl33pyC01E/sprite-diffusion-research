@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import sys
 from pathlib import Path
+
+import numpy as np
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -79,6 +83,10 @@ def main() -> None:
         ),
         disk_guard=DiskGuard(ROOT, min_free_bytes=100 * 1024**3),
     )
+    target_previews = [
+        _export_target_preview(record, args.output, index=index, plan_root=args.plan.parent)
+        for index, record in enumerate(selected)
+    ]
     selection = {
         "artifact_kind": "mugen_latent_still_split_inference_selection",
         "inference_report": {
@@ -95,6 +103,7 @@ def main() -> None:
                 "prompt": str(record["prompt"]),
                 "sample_index": index,
                 "split": str(record["split"]),
+                "target": target_previews[index],
             }
             for index, record in enumerate(selected)
         ],
@@ -122,6 +131,79 @@ def _file_sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _export_target_preview(
+    record: dict[str, object],
+    output: Path,
+    *,
+    index: int,
+    plan_root: Path,
+) -> dict[str, object]:
+    target = record.get("target")
+    if not isinstance(target, dict):
+        raise ValueError("still target must be an object")
+    relative = target.get("relative_path")
+    file_sha256 = target.get("file_sha256")
+    array_sha256 = target.get("array_content_sha256")
+    eligible = target.get("eligible_frame_indices")
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or not isinstance(file_sha256, str)
+        or not isinstance(array_sha256, str)
+        or not isinstance(eligible, list)
+        or len(eligible) != 1
+        or isinstance(eligible[0], bool)
+        or not isinstance(eligible[0], int)
+        or not 0 <= eligible[0] < 8
+    ):
+        raise ValueError("still target evidence is invalid")
+    source = (plan_root / relative).resolve()
+    plan_root_resolved = plan_root.resolve()
+    if plan_root_resolved != source and plan_root_resolved not in source.parents:
+        raise ValueError("still target escapes the plan root")
+    payload = source.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != file_sha256:
+        raise ValueError("still target file SHA-256 differs")
+    value = np.load(io.BytesIO(payload), allow_pickle=False)
+    if value.dtype != np.uint8 or value.shape != (8, 128, 128, 4):
+        raise ValueError("still target array geometry differs")
+    value = np.ascontiguousarray(value)
+    if _array_sha256(value) != array_sha256:
+        raise ValueError("still target array SHA-256 differs")
+    frame_index = eligible[0]
+    frame = np.ascontiguousarray(value[frame_index])
+    prompt = str(record["prompt"])
+    stem = f"{index:03d}-{hashlib.sha256(prompt.encode()).hexdigest()[:10]}-target"
+    native = output / f"{stem}-native.png"
+    preview = output / f"{stem}-preview.png"
+    image = Image.fromarray(frame)
+    image.save(native, format="PNG", optimize=False)
+    image.resize((512, 512), resample=Image.Resampling.NEAREST).save(
+        preview, format="PNG", optimize=False
+    )
+    return {
+        "array_content_sha256": _array_sha256(frame),
+        "frame_index": frame_index,
+        "native_png": {"file_sha256": _file_sha256(native), "path": native.name},
+        "preview_png": {
+            "display_only_nearest_neighbor_scale": 4,
+            "file_sha256": _file_sha256(preview),
+            "path": preview.name,
+        },
+        "sequence_id": str(record["sequence_id"]),
+        "source_array_content_sha256": array_sha256,
+        "source_file_sha256": file_sha256,
+    }
+
+
+def _array_sha256(value: np.ndarray) -> str:
+    contiguous = np.ascontiguousarray(value)
+    header = (
+        f"{contiguous.dtype.str}\0{'x'.join(str(item) for item in contiguous.shape)}\0"
+    ).encode()
+    return hashlib.sha256(header + contiguous.tobytes(order="C")).hexdigest()
 
 
 if __name__ == "__main__":
