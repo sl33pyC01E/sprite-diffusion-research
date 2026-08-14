@@ -502,14 +502,18 @@ Every NPY file byte hash, canonical array hash, shape, dtype, per-frame visible-
 count, and nonempty-frame hash is reverified before either view is published.
 
 Scale is published as an evaluation variable rather than used as a hidden architecture
-limit. The main dense-coverage tier admits every complete, unclipped fighter with a
-positive fitted scale; native scale is retained as exact metadata and cannot exclude
-an otherwise valid character. The `scale >= 0.5` slice, where native art is reduced by
-no more than 2x, remains a labeled high-fidelity evaluation/control slice only. Other
-scale bands may also be reported, but none controls main-corpus admission. The broad
-codec/appearance view likewise retains scale outliers; no source character is deleted.
-Results must be stratified by scale so added coverage cannot masquerade as
-high-fidelity evidence.
+limit. The main dense-coverage tier admits every complete, unclipped fighter with no
+empty output frame and a positive fitted scale; native scale is retained as exact
+metadata and cannot exclude an otherwise valid character. Unlike the diagnostic dense
+slice above, this coverage tier sets the dynamic-slot floor to zero and the distinct
+array floor to one. Static authored actions and shared-frame aliases therefore remain
+available to the base corpus, while the matched-action trainer separately requires
+exact target-distinct pairs before treating two verbs as causal steering supervision.
+The `scale >= 0.5` slice, where native art is reduced by no more than 2x, remains a
+labeled high-fidelity evaluation/control slice only. Other scale bands may also be
+reported, but none controls main-corpus admission. The broad codec/appearance view
+likewise retains scale outliers; no source character is deleted. Results must be
+stratified by scale so added coverage cannot masquerade as high-fidelity evidence.
 
 Dataset splits are transitive components, not independent rows. Exact full-SFF,
 complete action-array, and nonempty-frame hashes are grouped, and conservative DEF

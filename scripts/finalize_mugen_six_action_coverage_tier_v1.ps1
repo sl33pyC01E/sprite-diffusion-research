@@ -33,6 +33,8 @@ if (-not (Test-Path -LiteralPath $quality)) {
     }
     $auditArguments += @(
         '--minimum-view-scale', '0',
+        '--minimum-dynamic-slots', '0',
+        '--minimum-distinct-slot-arrays', '1',
         '--output', $quality
     )
     & $python @auditArguments
