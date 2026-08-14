@@ -169,7 +169,7 @@ if (-not (Test-Path -LiteralPath $auditReportPath)) {
         '--run', $run,
         '--output', $audit,
         '--step', '20000',
-        '--maximum-frames', '64'
+        '--maximum-frames', '512'
     ) -WorkingDirectory $root -WindowStyle Hidden -Wait -PassThru `
         -RedirectStandardOutput $auditOut -RedirectStandardError $auditErr
     if ($auditing.ExitCode -ne 0) {
