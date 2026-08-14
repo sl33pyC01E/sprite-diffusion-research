@@ -57,7 +57,10 @@ def main() -> None:
         2 * 1024**3, label="MUGEN AnimateDiff motion-LoRA evaluation"
     )
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    if checkpoint.get("artifact_kind") != ("mugen_animatediff_sparsectrl_temporal_lora_checkpoint"):
+    if checkpoint.get("artifact_kind") not in {
+        "mugen_animatediff_sparsectrl_temporal_adapter_checkpoint",
+        "mugen_animatediff_sparsectrl_temporal_lora_checkpoint",
+    }:
         raise RuntimeError("motion-LoRA checkpoint kind differs")
     config = checkpoint.get("config")
     if not isinstance(config, dict):
@@ -106,19 +109,34 @@ def main() -> None:
     unet = UNetMotionModel.from_unet2d(base_unet, motion_adapter).to("cuda").eval()
     del base_unet, motion_adapter, still
     unet.requires_grad_(False)
-    unet.add_adapter(
-        LoraConfig(
-            r=int(config["rank"]),
-            lora_alpha=int(config["alpha"]),
-            target_modules=TEMPORAL_TARGET_REGEX,
-        ),
-        adapter_name="mugen_motion",
-    )
-    variant_key = f"{args.weights_variant}_lora"
+    target_profile = config.get("target_profile", "temporal_lora")
+    if target_profile == "temporal_lora":
+        unet.add_adapter(
+            LoraConfig(
+                r=int(config["rank"]),
+                lora_alpha=int(config["alpha"]),
+                target_modules=TEMPORAL_TARGET_REGEX,
+            ),
+            adapter_name="mugen_motion",
+        )
+    variant_key = f"{args.weights_variant}_trainable_state"
     state = checkpoint.get(variant_key)
+    if state is None and target_profile == "temporal_lora":
+        state = checkpoint.get(f"{args.weights_variant}_lora")
     if not isinstance(state, dict) or not state:
         raise RuntimeError(f"checkpoint lacks {variant_key}")
-    set_peft_model_state_dict(unet, state, adapter_name="mugen_motion")
+    if target_profile == "temporal_lora":
+        set_peft_model_state_dict(unet, state, adapter_name="mugen_motion")
+    elif target_profile == "full_motion":
+        named_parameters = dict(unet.named_parameters())
+        expected = {name for name in named_parameters if "motion_modules" in name}
+        if set(state) != expected:
+            raise RuntimeError("full-motion checkpoint parameter names differ")
+        with torch.no_grad():
+            for name, value in state.items():
+                named_parameters[name].copy_(value)
+    else:
+        raise RuntimeError("checkpoint target profile differs")
     controlnet = (
         SparseControlNetModel.from_pretrained(
             CONTROL, variant="fp16", torch_dtype=dtype, local_files_only=True

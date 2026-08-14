@@ -56,26 +56,32 @@ def main() -> None:
     if output.exists():
         raise FileExistsError(f"Refusing to replace motion-LoRA output: {output}")
     guard = DiskGuard(ROOT, min_free_bytes=100 * 1024**3)
-    guard.require_capacity(2 * 1024**3, label="MUGEN AnimateDiff motion-LoRA training")
+    required_capacity = 8 * 1024**3 if args.target_profile == "full_motion" else 2 * 1024**3
+    guard.require_capacity(required_capacity, label="MUGEN AnimateDiff temporal training")
     inputs = _load_inputs(args.identity)
     rows = inputs["rows"]
     if not rows:
         raise RuntimeError("training selection is empty")
     output.mkdir(parents=True, exist_ok=False)
     config = {
-        "alpha": args.rank,
+        "alpha": args.rank if args.target_profile == "temporal_lora" else None,
         "control_frame_index": 0,
         "controlnet_conditioning_scale": args.control_scale,
         "ema_decay": args.ema_decay,
         "gradient_clip_norm": 1.0,
         "learning_rate": args.learning_rate,
         "min_snr_gamma": args.min_snr_gamma,
-        "precision": "float16",
-        "rank": args.rank,
+        "precision": args.precision,
+        "rank": args.rank if args.target_profile == "temporal_lora" else None,
         "seed": args.seed,
         "steps": args.steps,
-        "trainable_parameter_dtype": "float32",
-        "target_modules_regex": TEMPORAL_TARGET_REGEX,
+        "target_modules_regex": (
+            TEMPORAL_TARGET_REGEX if args.target_profile == "temporal_lora" else None
+        ),
+        "target_profile": args.target_profile,
+        "trainable_parameter_dtype": (
+            "float32" if args.target_profile == "temporal_lora" else args.precision
+        ),
         "weight_decay": 0.01,
     }
     random.seed(args.seed)
@@ -102,7 +108,7 @@ def main() -> None:
     _verify_source_index(CONTROL, CONTROL_SOURCE_INDEX_SHA256)
     if _file_sha256(STILL_CHECKPOINT) != STILL_CHECKPOINT_SHA256:
         raise RuntimeError("MUGEN still-LoRA checkpoint differs")
-    dtype = torch.float16
+    dtype = torch.bfloat16 if args.precision == "bfloat16" else torch.float16
     base_unet = UNet2DConditionModel.from_pretrained(
         BASE / "unet", local_files_only=True, torch_dtype=dtype
     )
@@ -133,23 +139,29 @@ def main() -> None:
     del base_unet, motion_adapter, still, still_state
     unet.requires_grad_(False)
     unet.enable_gradient_checkpointing()
-    adapter_name = "mugen_motion"
-    unet.add_adapter(
-        LoraConfig(
-            r=args.rank,
-            lora_alpha=args.rank,
-            target_modules=TEMPORAL_TARGET_REGEX,
-            init_lora_weights="gaussian",
-        ),
-        adapter_name=adapter_name,
-    )
+    adapter_name = None
+    if args.target_profile == "temporal_lora":
+        adapter_name = "mugen_motion"
+        unet.add_adapter(
+            LoraConfig(
+                r=args.rank,
+                lora_alpha=args.rank,
+                target_modules=TEMPORAL_TARGET_REGEX,
+                init_lora_weights="gaussian",
+            ),
+            adapter_name=adapter_name,
+        )
+    else:
+        for name, parameter in unet.named_parameters():
+            parameter.requires_grad_("motion_modules" in name)
     trainable = [
         (name, parameter) for name, parameter in unet.named_parameters() if parameter.requires_grad
     ]
     if not trainable or any("motion_modules" not in name for name, _ in trainable):
         raise RuntimeError("temporal LoRA attachment escaped motion modules")
-    for _, parameter in trainable:
-        parameter.data = parameter.data.float()
+    if args.target_profile == "temporal_lora":
+        for _, parameter in trainable:
+            parameter.data = parameter.data.float()
     controlnet = SparseControlNetModel.from_pretrained(
         CONTROL, variant="fp16", torch_dtype=dtype, local_files_only=True
     ).to("cuda")
@@ -166,10 +178,13 @@ def main() -> None:
     noise_scheduler = DDPMScheduler.from_config(PNDMScheduler.load_config(BASE / "scheduler"))
     noise_generator = torch.Generator(device="cuda").manual_seed(args.seed + 1)
     sampler = random.Random(args.seed + 2)
-    ema = {
-        key: value.detach().clone()
-        for key, value in get_peft_model_state_dict(unet, adapter_name=adapter_name).items()
-    }
+    ema = _trainable_state(
+        unet,
+        target_profile=args.target_profile,
+        adapter_name=adapter_name,
+        get_peft_model_state_dict=get_peft_model_state_dict,
+        clone=True,
+    )
     embeddings = inputs["embeddings"]
     row_by_prompt = inputs["text_row_by_prompt"]
     reference_by_sequence = inputs["reference_by_sequence"]
@@ -245,7 +260,13 @@ def main() -> None:
             if not bool(torch.isfinite(gradient_norm)):
                 raise FloatingPointError(f"non-finite gradient norm at step {step}")
             optimizer.step()
-            current = get_peft_model_state_dict(unet, adapter_name=adapter_name)
+            current = _trainable_state(
+                unet,
+                target_profile=args.target_profile,
+                adapter_name=adapter_name,
+                get_peft_model_state_dict=get_peft_model_state_dict,
+                clone=False,
+            )
             with torch.no_grad():
                 for key, value in current.items():
                     ema[key].lerp_(value.detach(), 1 - args.ema_decay)
@@ -270,8 +291,8 @@ def main() -> None:
                     config=config,
                     inputs=inputs["contract"],
                     identity=args.identity,
-                    raw_lora=current,
-                    ema_lora=ema,
+                    raw_state=current,
+                    ema_state=ema,
                     optimizer=optimizer,
                     sampler=sampler,
                     noise_generator=noise_generator,
@@ -279,7 +300,7 @@ def main() -> None:
                 )
     final_checkpoint = output / f"training-step-{args.steps:07d}.pt"
     report = {
-        "artifact_kind": "mugen_animatediff_sparsectrl_temporal_lora_training_report",
+        "artifact_kind": "mugen_animatediff_sparsectrl_temporal_adapter_training_report",
         "claim": (
             "pretrained latent reference-to-motion adaptation; quality must be established "
             "by held-out evaluation"
@@ -325,6 +346,10 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--identity")
     parser.add_argument("--steps", type=int, default=1_000)
     parser.add_argument("--rank", type=int, default=16)
+    parser.add_argument(
+        "--target-profile", choices=("temporal_lora", "full_motion"), default="temporal_lora"
+    )
+    parser.add_argument("--precision", choices=("float16", "bfloat16"), default="float16")
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--min-snr-gamma", type=float, default=5.0)
     parser.add_argument("--control-scale", type=float, default=1.0)
@@ -341,6 +366,10 @@ def _arguments() -> argparse.Namespace:
             parser.error(f"--{name.replace('_', '-')} must be finite and positive")
     if not math.isfinite(args.ema_decay) or not 0 <= args.ema_decay < 1:
         parser.error("--ema-decay must be in [0,1)")
+    if args.target_profile == "full_motion" and args.precision != "bfloat16":
+        parser.error("full_motion requires --precision bfloat16")
+    if args.target_profile == "full_motion" and args.checkpoint_every < args.steps:
+        parser.error("full_motion only supports a final checkpoint to protect the disk floor")
     return args
 
 
@@ -440,17 +469,17 @@ def _save_checkpoint(
     config: dict[str, object],
     inputs: dict[str, object],
     identity: str | None,
-    raw_lora: dict[str, torch.Tensor],
-    ema_lora: dict[str, torch.Tensor],
+    raw_state: dict[str, torch.Tensor],
+    ema_state: dict[str, torch.Tensor],
     optimizer: torch.optim.Optimizer,
     sampler: random.Random,
     noise_generator: torch.Generator,
     torch_module: object,
 ) -> None:
     payload = {
-        "artifact_kind": "mugen_animatediff_sparsectrl_temporal_lora_checkpoint",
+        "artifact_kind": "mugen_animatediff_sparsectrl_temporal_adapter_checkpoint",
         "config": config,
-        "ema_lora": {key: value.detach().cpu() for key, value in ema_lora.items()},
+        "ema_trainable_state": {key: value.detach().cpu() for key, value in ema_state.items()},
         "inputs": inputs,
         "model": {
             "base_source_index_sha256": BASE_SOURCE_INDEX_SHA256,
@@ -459,7 +488,7 @@ def _save_checkpoint(
             "still_lora_checkpoint_sha256": STILL_CHECKPOINT_SHA256,
         },
         "optimizer": optimizer.state_dict(),
-        "raw_lora": {key: value.detach().cpu() for key, value in raw_lora.items()},
+        "raw_trainable_state": {key: value.detach().cpu() for key, value in raw_state.items()},
         "rng": {
             "cuda": torch_module.cuda.get_rng_state(),
             "noise": noise_generator.get_state(),
@@ -482,6 +511,26 @@ def _save_checkpoint(
         os.replace(stage, path)
     finally:
         stage.unlink(missing_ok=True)
+
+
+def _trainable_state(
+    unet: torch.nn.Module,
+    *,
+    target_profile: str,
+    adapter_name: str | None,
+    get_peft_model_state_dict: object,
+    clone: bool,
+) -> dict[str, torch.Tensor]:
+    if target_profile == "temporal_lora":
+        state = get_peft_model_state_dict(unet, adapter_name=adapter_name)
+        return {
+            key: value.detach().clone() if clone else value.detach() for key, value in state.items()
+        }
+    return {
+        name: parameter.detach().clone() if clone else parameter.detach()
+        for name, parameter in unet.named_parameters()
+        if parameter.requires_grad
+    }
 
 
 def _verify_source_index(root: Path, expected_sha256: str) -> None:
