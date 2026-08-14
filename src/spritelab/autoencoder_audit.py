@@ -83,6 +83,7 @@ def export_autoencoder_reconstruction_audit(
     *,
     expected_checkpoint_sha256: str,
     maximum_frames: int = 16,
+    maximum_gallery_frames: int = 16,
     integer_scale: int = 2,
     allow_legacy_torch_version: bool = False,
     disk_guard: DiskGuard | None = None,
@@ -144,6 +145,10 @@ def export_autoencoder_reconstruction_audit(
     }
     if corpus_record != expected_corpus:
         raise AutoencoderAuditContractError("checkpoint corpus contract does not match manifest")
+    if isinstance(maximum_gallery_frames, bool) or not isinstance(maximum_gallery_frames, int):
+        raise TypeError("maximum_gallery_frames must be an integer")
+    if maximum_gallery_frames <= 0:
+        raise ValueError("maximum_gallery_frames must be positive")
     selection = select_identity_diverse_frames(corpus.validation, maximum_frames=maximum_frames)
     if not selection:
         raise AutoencoderAuditContractError("held-out reconstruction selection is empty")
@@ -180,10 +185,11 @@ def export_autoencoder_reconstruction_audit(
     aggregate = _metrics(target, reconstruction)
     target_bytes = _npy_bytes(target)
     reconstruction_bytes = _npy_bytes(reconstruction)
+    gallery_count = min(len(samples), maximum_gallery_frames)
     gallery_bytes = _gallery_bytes(
-        target,
-        reconstruction,
-        samples,
+        target[:gallery_count],
+        reconstruction[:gallery_count],
+        samples[:gallery_count],
         integer_scale=integer_scale,
     )
     target_sha256 = hashlib.sha256(target_bytes).hexdigest()
@@ -205,6 +211,7 @@ def export_autoencoder_reconstruction_audit(
             "layout": "two_samples_per_row_each_target_then_reconstruction",
             "path": "held-out-reconstruction-gallery.png",
             "resampling": "nearest_positive_integer",
+            "sample_count": gallery_count,
         },
         "reconstruction_array": {
             "array_content_sha256": _array_sha256(reconstruction),

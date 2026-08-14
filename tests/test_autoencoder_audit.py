@@ -137,6 +137,7 @@ def test_reconstruction_audit_is_hash_bound_no_clobber_and_stock_safe_load(
     report = json.loads(result.report_path.read_text(encoding="utf-8"))
     assert prepare_arguments["usage"] == "autoencoder"
     assert report["artifact_kind"] == ("sprite_rgba_autoencoder_held_out_reconstruction_audit")
+    assert report["display_gallery"]["sample_count"] == 2
     assert report["checkpoint"]["load_contract"] == (
         "torch.load(weights_only=True,map_location='cpu')"
     )
