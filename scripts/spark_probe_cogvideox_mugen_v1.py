@@ -50,7 +50,7 @@ def main() -> None:
     reference = Image.open(REFERENCE).convert("RGB")
     if reference.size != (128, 128):
         raise RuntimeError("MUGEN reference geometry differs")
-    conditioning = reference.resize((512, 512), Image.Resampling.NEAREST)
+    conditioning = reference.resize((480, 480), Image.Resampling.NEAREST)
     pipe = CogVideoXImageToVideoPipeline.from_pretrained(
         MODEL,
         torch_dtype=torch.bfloat16,
@@ -65,24 +65,24 @@ def main() -> None:
             image=conditioning,
             prompt=PROMPT,
             negative_prompt=NEGATIVE_PROMPT,
-            height=512,
-            width=512,
+            height=480,
+            width=480,
             num_frames=9,
             num_inference_steps=50,
             guidance_scale=6,
             use_dynamic_cfg=True,
             generator=generator,
         ).frames[0]
-    if len(frames) != 9 or any(frame.size != (512, 512) for frame in frames):
+    if len(frames) != 9 or any(frame.size != (480, 480) for frame in frames):
         raise RuntimeError("CogVideoX output geometry differs")
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{OUTPUT.name}.stage-", dir=OUTPUT.parent))
     try:
-        conditioning.save(stage / "reference-conditioning-512.png", optimize=False)
+        conditioning.save(stage / "reference-conditioning-480.png", optimize=False)
         display = []
         frame_records = []
         for index, frame in enumerate(frames):
-            raw_path = stage / f"frame-{index:02d}-raw-512.png"
+            raw_path = stage / f"frame-{index:02d}-raw-480.png"
             display_path = stage / f"frame-{index:02d}-display-128.png"
             frame.convert("RGB").save(raw_path, optimize=False)
             reduced = frame.convert("RGB").resize((128, 128), Image.Resampling.BOX)
@@ -136,7 +136,7 @@ def main() -> None:
                 "source_index_sha256": source_index_sha256,
             },
             "reference": {
-                "conditioning_resize": "128_to_512_nearest_neighbor",
+                "conditioning_resize": "128_to_480_nearest_neighbor",
                 "file_sha256": REFERENCE_SHA256,
                 "path": str(REFERENCE),
             },
