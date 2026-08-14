@@ -148,6 +148,15 @@ then Anime Ascension only while the independent 100-GiB floor remains satisfied.
 Every acquired archive still requires exact hashing, inventory, decoder audit,
 and cross-corpus payload deduplication before it contributes training rows.
 
+The Spark MediaFire fetcher re-resolves the indexed landing page at retrieval
+time instead of trusting an expiring direct URL.  It requires the fresh filename
+and binary-size declaration to match the pinned metadata report, resumes only
+from an exact HTTP byte range, fsyncs bounded chunks, enforces the 100-GiB floor
+before the transfer and during streaming, and retains every partial after errors.
+Completion moves the exact bytes into SHA-256 CAS and publishes a no-clobber
+acquisition record containing both the indexed landing evidence and the fresh
+landing-page hash.  It never executes or extracts the downloaded roster.
+
 ## First collection-scale pass
 
 The exact Simple MUGEN landing snapshot SHA-256 is
