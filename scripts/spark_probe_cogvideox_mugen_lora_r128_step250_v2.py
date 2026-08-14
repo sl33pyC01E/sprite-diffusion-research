@@ -18,9 +18,23 @@ from PIL import Image
 ROOT = Path("/home/sleepy/sprite-lab-cogvideox")
 MODEL = ROOT / "CogVideoX-5b-I2V-a6f0f4858a83"
 DATASET = ROOT / "mugen-cogvideox-orange-fighter-i2v-native-caption-v3"
-LORA = ROOT / "lora-orange-fighter-native-caption-r128-step250-v2"
+LORA = Path(
+    os.environ.get(
+        "SPRITELAB_COGVIDEOX_LORA",
+        ROOT / "lora-orange-fighter-native-caption-r128-step250-v2",
+    )
+)
+LORA_WEIGHT_NAME = os.environ.get(
+    "SPRITELAB_COGVIDEOX_LORA_WEIGHT_NAME", "pytorch_lora_weights.safetensors"
+)
+TRAINING_STEPS = int(os.environ.get("SPRITELAB_COGVIDEOX_TRAINING_STEPS", "250"))
 TRAIN_LOG = ROOT / "lora-orange-fighter-native-caption-r128-step250-v2.log"
-OUTPUT = ROOT / "probe-orange-fighter-normal-attack-lora-r128-step250-v2"
+OUTPUT = Path(
+    os.environ.get(
+        "SPRITELAB_COGVIDEOX_OUTPUT",
+        ROOT / "probe-orange-fighter-normal-attack-lora-r128-step250-v2",
+    )
+)
 SOURCE_INDEX_SHA256 = "98fbc592f23269a38d039d16f969844a9da073b56b24567772433d4b02e2f831"
 DATASET_MANIFEST_SHA256 = "524a387ef02ce3ef42ac711e80f476d992f28e515edec37196822124821658aa"
 SEED = 20260830
@@ -54,12 +68,15 @@ def main() -> None:
         raise RuntimeError("normal-attack target geometry differs")
     conditioning = Image.fromarray(target[0], mode="RGB")
 
-    weights_path = LORA / "pytorch_lora_weights.safetensors"
+    weights_path = LORA / LORA_WEIGHT_NAME
+    checksum_paths = sorted(LORA.glob("*.sha256"))
     sums_path = LORA / "sha256sums.txt"
-    if not weights_path.is_file() or not sums_path.is_file() or not TRAIN_LOG.is_file():
+    if sums_path.is_file():
+        checksum_paths.append(sums_path)
+    if not weights_path.is_file() or not checksum_paths or not TRAIN_LOG.is_file():
         raise RuntimeError("completed LoRA training closure is absent")
     weights_sha256 = file_sha256(weights_path)
-    sums_text = sums_path.read_text(encoding="utf-8")
+    sums_text = "\n".join(path.read_text(encoding="utf-8") for path in checksum_paths)
     if weights_sha256 not in sums_text or str(weights_path) not in sums_text:
         raise RuntimeError("LoRA weight is absent from its training checksum closure")
 
@@ -68,7 +85,7 @@ def main() -> None:
     ).to("cuda")
     pipe.vae.enable_tiling()
     pipe.vae.enable_slicing()
-    pipe.load_lora_weights(LORA, adapter_name="mugen-action")
+    pipe.load_lora_weights(LORA, weight_name=LORA_WEIGHT_NAME, adapter_name="mugen-action")
     pipe.set_adapters("mugen-action", adapter_weights=1.0)
     pipe.set_progress_bar_config(disable=True)
     generator = torch.Generator(device="cuda").manual_seed(SEED)
@@ -164,7 +181,7 @@ def main() -> None:
                 "lora_file_sha256": weights_sha256,
                 "lora_path": str(weights_path),
                 "rank": 128,
-                "steps": 250,
+                "steps": TRAINING_STEPS,
                 "training_log_sha256": file_sha256(TRAIN_LOG),
             },
         }
