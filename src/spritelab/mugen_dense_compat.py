@@ -236,6 +236,13 @@ def build_mugen_dense_captioned_materialization(
         structured = _object(row.get("structured_caption"), "structured caption")
         _text(structured, "subject_type")
         _text(row, "training_appearance_prompt")
+        frame_index = row.get("frame_index")
+        if (
+            isinstance(frame_index, bool)
+            or not isinstance(frame_index, int)
+            or not 0 <= frame_index < 8
+        ):
+            raise ValueError(f"caption reference frame index differs: {variant_id}")
         if _digest(row, "reference_frame_array_content_sha256") != reference_by_variant.get(
             variant_id
         ):
@@ -257,6 +264,7 @@ def build_mugen_dense_captioned_materialization(
             "reference_frame_array_content_sha256": _digest(
                 row, "reference_frame_array_content_sha256"
             ),
+            "reference_frame_index": frame_index,
             "request_body_sha256": _digest(row, "request_body_sha256"),
         }
         sequence["entity_class"] = _text(

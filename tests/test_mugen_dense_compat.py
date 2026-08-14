@@ -110,6 +110,7 @@ def test_captioned_dense_bridge_enables_conditional_loading(tmp_path: Path) -> N
         "records": [
             {
                 "identity_id": "identity-a",
+                "frame_index": 0,
                 "reference_frame_array_content_sha256": reference_sha256,
                 "request_body_sha256": "c" * 64,
                 "split": "train",
