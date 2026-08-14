@@ -14,6 +14,7 @@ from spritelab.latent_motion_train import (
     _ema_checkpoint_artifact_kind,
     _ema_update,
     _paired_action_metrics,
+    _paired_appearance_metrics,
     _sample_motion_residual,
     _sample_target_distinct_pair,
     _sample_training_times,
@@ -198,6 +199,40 @@ def test_paired_action_metrics_reject_shape_mismatch() -> None:
             torch,
             predicted_pm=target[:1],
             permuted_pm=target,
+            target_pm=target,
+        )
+
+
+def test_paired_appearance_metrics_separate_sprite_and_canvas_error() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 1, 4, 2, 2))
+    target[:, :, :, 0, 0] = 1
+    predicted = target.clone()
+    predicted[:, :, :, 0, 0] = 0.5
+    predicted[:, :, :, 1, 1] = 0.25
+
+    metrics = _paired_appearance_metrics(
+        torch,
+        predicted_pm=predicted,
+        target_pm=target,
+    )
+
+    assert metrics["foreground_premultiplied_rgba_mae"].item() == pytest.approx(0.5)
+    assert metrics["background_premultiplied_rgba_mae"].item() == pytest.approx(1 / 12)
+    assert metrics["alpha_iou_127"].item() == pytest.approx(1)
+    assert metrics["alpha_precision_127"].item() == pytest.approx(1)
+    assert metrics["alpha_recall_127"].item() == pytest.approx(1)
+    assert metrics["foreground_occupancy_ratio"].item() == pytest.approx(1)
+
+
+def test_paired_appearance_metrics_reject_shape_mismatch() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 1, 4, 2, 2))
+
+    with pytest.raises(ValueError, match="share one shape"):
+        _paired_appearance_metrics(
+            torch,
+            predicted_pm=target[:1],
             target_pm=target,
         )
 

@@ -1221,6 +1221,8 @@ def _validate(
 ) -> dict[str, float]:
     model.eval()
     totals: defaultdict[str, float] = defaultdict(float)
+    verb_totals: defaultdict[str, float] = defaultdict(float)
+    verb_counts: defaultdict[str, int] = defaultdict(int)
     generator = runtime.Generator(device=device).manual_seed(seed)
     with runtime.no_grad():
         for pair in selection:
@@ -1296,8 +1298,11 @@ def _validate(
                 permuted_pm=permuted_pm,
                 target_pm=target_pm,
             )
-            intersection = ((predicted_alpha >= 0.5) & (target_alpha >= 0.5)).sum()
-            union = ((predicted_alpha >= 0.5) | (target_alpha >= 0.5)).sum().clamp_min(1)
+            appearance = _paired_appearance_metrics(
+                runtime,
+                predicted_pm=predicted_pm,
+                target_pm=target_pm,
+            )
             temporal = runtime.nn.functional.l1_loss(
                 predicted_pm[:, 1:] - predicted_pm[:, :-1],
                 target_pm[:, 1:] - target_pm[:, :-1],
@@ -1307,17 +1312,24 @@ def _validate(
             totals["premultiplied_rgba_mae"] += float(
                 runtime.nn.functional.l1_loss(predicted_pm, target_pm).cpu()
             )
-            totals["alpha_iou_127"] += float((intersection / union).cpu())
             totals["temporal_delta_mae"] += float(temporal.cpu())
             totals["decoder_reconstruction_loss"] += float(reconstruction.total.cpu())
-            for key, value in causal.items():
+            for key, value in {**causal, **appearance}.items():
                 totals[key] += float(value.cpu())
+            for offset, row_index in enumerate(pair):
+                verb = corpus.rows[row_index].verb
+                verb_totals[verb] += float(
+                    runtime.nn.functional.l1_loss(predicted_pm[offset], target_pm[offset]).cpu()
+                )
+                verb_counts[verb] += 1
     model.train()
     count = len(selection)
     output = {key: value / count for key, value in totals.items()}
     output["action_token_loss_delta"] = (
         output["action_permuted_mse"] - output["latent_endpoint_mse"]
     )
+    for verb in sorted(verb_totals, key=str.encode):
+        output[f"verb_{verb}_premultiplied_rgba_mae"] = verb_totals[verb] / verb_counts[verb]
     return output
 
 
@@ -1361,6 +1373,47 @@ def _paired_action_metrics(
         "action_correct_target_margin": runtime.stack(margins).mean(),
         "target_action_distance": target_distance,
         "generated_action_distance": generated_distance,
+    }
+
+
+def _paired_appearance_metrics(
+    runtime: Any,
+    *,
+    predicted_pm: Any,
+    target_pm: Any,
+) -> dict[str, Any]:
+    """Separate sprite fidelity from transparent-canvas performance."""
+
+    expected = tuple(target_pm.shape)
+    if len(expected) != 5 or expected[0] != 2 or expected[2] != 4:
+        raise ValueError("paired appearance tensors must have shape [2,T,4,H,W]")
+    if tuple(predicted_pm.shape) != expected:
+        raise ValueError("paired appearance tensors must share one shape")
+    predicted_alpha = predicted_pm[:, :, 3:4]
+    target_alpha = target_pm[:, :, 3:4]
+    predicted_foreground = predicted_alpha >= 0.5
+    target_foreground = target_alpha >= 0.5
+    intersection = (predicted_foreground & target_foreground).sum()
+    union = (predicted_foreground | target_foreground).sum().clamp_min(1)
+    predicted_count = predicted_foreground.sum()
+    target_count = target_foreground.sum()
+    absolute_error = (predicted_pm - target_pm).abs()
+    foreground_channels = target_foreground.expand_as(absolute_error)
+    background_channels = (~target_foreground).expand_as(absolute_error)
+    foreground_error = absolute_error.masked_select(foreground_channels)
+    background_error = absolute_error.masked_select(background_channels)
+    zero = absolute_error.new_zeros(())
+    return {
+        "alpha_iou_127": intersection / union,
+        "alpha_precision_127": intersection / predicted_count.clamp_min(1),
+        "alpha_recall_127": intersection / target_count.clamp_min(1),
+        "foreground_premultiplied_rgba_mae": (
+            foreground_error.mean() if foreground_error.numel() else zero
+        ),
+        "background_premultiplied_rgba_mae": (
+            background_error.mean() if background_error.numel() else zero
+        ),
+        "foreground_occupancy_ratio": predicted_count / target_count.clamp_min(1),
     }
 
 

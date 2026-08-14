@@ -661,6 +661,10 @@ blocks and preview galleries: target-distinct, verb-balanced pairs drawn from th
 training split, and target-distinct, verb-balanced pairs drawn from identities that
 never enter training. In-distribution failure is diagnosed as model/optimization
 failure; held-out failure is reported separately as a generalization limitation.
+Checkpoint evaluation additionally separates target-foreground error from transparent-
+canvas error, reports alpha precision, recall, and occupancy, and emits a
+premultiplied-RGBA error for every represented verb. This prevents background area or
+an easy action from masking weak sprite or action fidelity in the aggregate score.
 Each gallery row now binds three matched animations with exact paths and hashes: the
 authored target, the requested-action output, and an action-token-substituted output
 generated from the same reference, frame phases, and noise. This makes directional
