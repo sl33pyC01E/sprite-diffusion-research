@@ -532,7 +532,12 @@ def _train(
             .cpu()
         )
         optimizer.step()
-        _ema_update(runtime, ema, model, config.ema_decay)
+        _ema_update(
+            runtime,
+            ema,
+            model,
+            0.0 if step <= config.warmup_steps else config.ema_decay,
+        )
         validation = None
         if step == 1 or step % config.validate_every == 0 or step == config.steps:
             latest_validation = _validate(
@@ -584,6 +589,7 @@ def _train(
             "artifact_kind": "mugen_latent_still_dit_ema_inference_checkpoint",
             "config": asdict(config),
             "corpus": corpus.contract,
+            "ema_policy": _ema_policy(config),
             "ema_model": ema.state_dict(),
             "normalization": {
                 "channel_mean": list(corpus.channel_mean),
@@ -611,6 +617,7 @@ def _train(
         ),
         "config": asdict(config),
         "corpus": corpus.contract,
+        "ema_policy": _ema_policy(config),
         "final_training_evaluation": final_training_evaluation,
         "final_validation": latest_validation,
         "history": {
@@ -737,6 +744,7 @@ def _write_training_checkpoint(
             "artifact_kind": "mugen_latent_still_dit_resume_checkpoint",
             "config": asdict(config),
             "corpus": corpus.contract,
+            "ema_policy": _ema_policy(config),
             "ema_model": ema.state_dict(),
             "optimizer": optimizer.state_dict(),
             "raw_model": model.state_dict(),
@@ -840,6 +848,14 @@ def _ema_update(runtime: Any, ema: Any, model: Any, decay: float) -> None:
             target.lerp_(source.detach(), 1 - decay)
         for target, source in zip(ema.buffers(), model.buffers(), strict=True):
             target.copy_(source)
+
+
+def _ema_policy(config: LatentStillTrainingConfig) -> dict[str, Any]:
+    return {
+        "decay_after_warmup": config.ema_decay,
+        "policy": "copy_raw_through_learning_rate_warmup_then_fixed_decay",
+        "warmup_steps": config.warmup_steps,
+    }
 
 
 def _records(value: dict[str, Any], key: str, label: str) -> list[dict[str, Any]]:

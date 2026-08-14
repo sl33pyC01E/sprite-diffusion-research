@@ -225,7 +225,7 @@ def test_corpus_loader_verifies_plan_latent_and_text_closure(tmp_path) -> None:
             batch_size=1,
             gradient_accumulation=1,
             steps=2,
-            warmup_steps=0,
+            warmup_steps=1,
             checkpoint_every=1,
             validate_every=1,
             log_every=1,
@@ -245,6 +245,20 @@ def test_corpus_loader_verifies_plan_latent_and_text_closure(tmp_path) -> None:
                 global_attention_every=2,
             ),
         ),
+    )
+    warmup_checkpoint = torch.load(
+        result.output_directory / "training-step-0000001.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    assert warmup_checkpoint["ema_policy"] == {
+        "decay_after_warmup": 0.9999,
+        "policy": "copy_raw_through_learning_rate_warmup_then_fixed_decay",
+        "warmup_steps": 1,
+    }
+    assert all(
+        torch.equal(warmup_checkpoint["raw_model"][key], value)
+        for key, value in warmup_checkpoint["ema_model"].items()
     )
     checkpoint = torch.load(result.training_checkpoint_path, map_location="cpu", weights_only=True)
     assert checkpoint["step"] == 2
