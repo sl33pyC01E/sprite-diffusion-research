@@ -85,15 +85,44 @@ def main() -> None:
     if set(completed) - expected:
         raise RuntimeError("caption journal contains variants outside the input manifest")
     pending = [row for row in inputs if row["variant_id"] not in completed]
+    groups = _caption_request_groups(pending, completed)
     endpoint = args.base_url.rstrip("/") + "/chat/completions"
     with journal_path.open("a", encoding="utf-8", newline="\n") as journal:
+        remote_groups = []
+        finished = 0
+        reused = 0
+        for donor, sources in groups:
+            if donor is None:
+                remote_groups.append((sources[0], sources[1:]))
+                continue
+            for source in sources:
+                record = _reuse_caption(donor, source)
+                journal.write(canonical_json_bytes(record).decode("utf-8"))
+                finished += 1
+                reused += 1
+        if reused:
+            journal.flush()
+            os.fsync(journal.fileno())
+            print(
+                json.dumps(
+                    {
+                        "captioned": len(completed) + finished,
+                        "exact_render_reused": reused,
+                        "remaining": len(pending) - finished,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
         executor = ThreadPoolExecutor(max_workers=args.workers)
-        iterator = iter(pending)
-        futures: dict[Future[dict[str, Any]], dict[str, Any]] = {}
+        iterator = iter(remote_groups)
+        futures: dict[
+            Future[dict[str, Any]], tuple[dict[str, Any], tuple[dict[str, Any], ...]]
+        ] = {}
 
         def submit_next() -> bool:
             try:
-                row = next(iterator)
+                row, aliases = next(iterator)
             except StopIteration:
                 return False
             futures[
@@ -103,7 +132,7 @@ def main() -> None:
                     endpoint=endpoint,
                     timeout=args.request_timeout,
                 )
-            ] = row
+            ] = (row, aliases)
             return True
 
         for _ in range(args.workers):
@@ -113,20 +142,26 @@ def main() -> None:
             while futures:
                 done, _ = wait(futures, return_when=FIRST_COMPLETED)
                 for future in done:
-                    source = futures.pop(future)
+                    source, aliases = futures.pop(future)
                     try:
                         record = future.result()
                     except CaptionFailure as error:
                         _append(failure_path, error.record)
                         raise
                     journal.write(canonical_json_bytes(record).decode("utf-8"))
+                    for alias in aliases:
+                        journal.write(
+                            canonical_json_bytes(_reuse_caption(record, alias)).decode("utf-8")
+                        )
                     journal.flush()
                     os.fsync(journal.fileno())
-                    finished += 1
+                    finished += 1 + len(aliases)
+                    reused += len(aliases)
                     print(
                         json.dumps(
                             {
                                 "captioned": len(completed) + finished,
+                                "exact_render_reused": reused,
                                 "remaining": len(pending) - finished,
                                 "subject_type": record["structured_caption"]["subject_type"],
                                 "variant_id": source["variant_id"],
@@ -150,6 +185,7 @@ def main() -> None:
     manifest = {
         "artifact_kind": "mugen_dense_literal_visual_caption_dataset",
         "caption_contract": {
+            "exact_render_duplicate_caption_reuse": True,
             "identity_and_franchise_hidden_from_model": True,
             "model_output_is_unverified": True,
             "pose_and_facing_excluded_from_identity_appearance_prompt": True,
@@ -278,6 +314,57 @@ def _caption(source: dict[str, Any], *, endpoint: str, timeout: float) -> dict[s
         ),
         "variant_id": source["variant_id"],
     }
+
+
+def _caption_request_groups(
+    pending: list[dict[str, Any]],
+    completed: dict[str, dict[str, Any]],
+) -> list[tuple[dict[str, Any] | None, tuple[dict[str, Any], ...]]]:
+    donors: dict[str, dict[str, Any]] = {}
+    for variant_id in sorted(completed, key=str.encode):
+        record = completed[variant_id]
+        digest = _digest(_object(record.get("caption_input"), "caption input"), "file_sha256")
+        existing = donors.get(digest)
+        if existing is not None and (
+            existing.get("structured_caption") != record.get("structured_caption")
+            or existing.get("training_appearance_prompt")
+            != record.get("training_appearance_prompt")
+        ):
+            raise RuntimeError("completed captions disagree for one exact rendered caption input")
+        donors.setdefault(digest, record)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for source in pending:
+        digest = _digest(_object(source.get("caption_input"), "caption input"), "file_sha256")
+        grouped.setdefault(digest, []).append(source)
+    return [
+        (donors.get(digest), tuple(rows))
+        for digest, rows in sorted(grouped.items(), key=lambda item: item[0])
+    ]
+
+
+def _reuse_caption(donor: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+    donor_input = _object(donor.get("caption_input"), "donor caption input")
+    source_input = _object(source.get("caption_input"), "source caption input")
+    digest = _digest(source_input, "file_sha256")
+    if _digest(donor_input, "file_sha256") != digest:
+        raise ValueError("caption reuse requires byte-identical rendered inputs")
+    record = dict(donor)
+    for key in (
+        "caption_input",
+        "frame_index",
+        "identity_id",
+        "identity_label_provenance_only",
+        "reference_frame_array_content_sha256",
+        "split",
+        "variant_id",
+    ):
+        record[key] = source[key]
+    record["caption_reuse"] = {
+        "caption_input_file_sha256": digest,
+        "method": "exact_rendered_caption_input_sha256_v1",
+        "source_variant_id": _text(donor, "variant_id"),
+    }
+    return record
 
 
 def _post_json(url: str, payload: bytes, *, timeout: float, attempts: int) -> bytes:
