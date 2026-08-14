@@ -10,6 +10,7 @@ from spritelab.latent_motion_train import (
     LatentMotionTrainingRow,
     _balanced_pairs_from_index,
     _config_from_dict,
+    _ema_checkpoint_artifact_kind,
     _ema_update,
     _paired_action_metrics,
     build_matched_action_index,
@@ -132,3 +133,21 @@ def test_balanced_pairs_validate_limit_and_empty_index() -> None:
         _balanced_pairs_from_index({}, 0)
     with pytest.raises(LatentMotionTrainingError, match="no matched action pairs"):
         _balanced_pairs_from_index({}, 1)
+
+
+@pytest.mark.parametrize(
+    "artifact_kind",
+    (
+        "mugen_reference_latent_motion_ema_inference_checkpoint",
+        "mugen_reference_latent_motion_resume_checkpoint",
+    ),
+)
+def test_evaluator_accepts_inference_and_resume_ema_checkpoints(
+    artifact_kind: str,
+) -> None:
+    assert _ema_checkpoint_artifact_kind({"artifact_kind": artifact_kind}) == artifact_kind
+
+
+def test_evaluator_rejects_unknown_checkpoint_kind() -> None:
+    with pytest.raises(LatentMotionTrainingError, match="wrong artifact kind"):
+        _ema_checkpoint_artifact_kind({"artifact_kind": "untrusted"})

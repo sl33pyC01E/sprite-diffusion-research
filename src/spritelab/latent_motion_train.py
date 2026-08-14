@@ -497,10 +497,7 @@ def evaluate_latent_motion_checkpoint(
         checkpoint = runtime.load(checkpoint_file, map_location="cpu", weights_only=True)
     except Exception as error:
         raise LatentMotionTrainingError("inference checkpoint failed safe load") from error
-    if not isinstance(checkpoint, dict) or checkpoint.get("artifact_kind") != (
-        "mugen_reference_latent_motion_ema_inference_checkpoint"
-    ):
-        raise LatentMotionTrainingError("inference checkpoint has the wrong artifact kind")
+    checkpoint_kind = _ema_checkpoint_artifact_kind(checkpoint)
     corpus = load_latent_motion_training_corpus(manifest_path, verify_hashes=True)
     if checkpoint.get("corpus") != corpus.contract:
         raise LatentMotionTrainingError("inference checkpoint corpus differs")
@@ -562,6 +559,7 @@ def evaluate_latent_motion_checkpoint(
         report = {
             "artifact_kind": "mugen_reference_latent_motion_test_evaluation",
             "checkpoint": {
+                "artifact_kind": checkpoint_kind,
                 "file_sha256": actual_sha256,
                 "step": checkpoint.get("step"),
             },
@@ -594,6 +592,19 @@ def evaluate_latent_motion_checkpoint(
         report_path=output / "evaluation-report.json",
         report_sha256=hashlib.sha256(payload).hexdigest(),
     )
+
+
+def _ema_checkpoint_artifact_kind(checkpoint: Any) -> str:
+    if not isinstance(checkpoint, dict):
+        raise LatentMotionTrainingError("EMA checkpoint must be an object")
+    artifact_kind = checkpoint.get("artifact_kind")
+    allowed = {
+        "mugen_reference_latent_motion_ema_inference_checkpoint",
+        "mugen_reference_latent_motion_resume_checkpoint",
+    }
+    if artifact_kind not in allowed:
+        raise LatentMotionTrainingError("EMA checkpoint has the wrong artifact kind")
+    return artifact_kind
 
 
 def _train(
