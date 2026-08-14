@@ -23,6 +23,11 @@ def main() -> None:
     expected_files = {
         sibling.rfilename: sibling.size for sibling in info.siblings if sibling.rfilename
     }
+    expected_lfs_sha256 = {
+        sibling.rfilename: sibling.lfs.sha256
+        for sibling in info.siblings
+        if sibling.rfilename and sibling.lfs is not None and sibling.lfs.sha256
+    }
     complete = bool(expected_files) and all(
         (OUTPUT / relative).is_file()
         and (expected_bytes is None or (OUTPUT / relative).stat().st_size == expected_bytes)
@@ -43,6 +48,13 @@ def main() -> None:
     ]
     if missing_or_wrong:
         raise RuntimeError(f"CogVideoX snapshot closure differs: {missing_or_wrong}")
+    mismatched_lfs = [
+        relative
+        for relative, expected_sha256 in expected_lfs_sha256.items()
+        if file_sha256(OUTPUT / relative) != expected_sha256
+    ]
+    if mismatched_lfs:
+        raise RuntimeError(f"CogVideoX LFS payload hashes differ: {mismatched_lfs}")
     records = []
     for path in sorted(
         (path for path in OUTPUT.rglob("*") if path.is_file()),
@@ -51,13 +63,14 @@ def main() -> None:
         relative = path.relative_to(OUTPUT).as_posix()
         if relative == "source-index.json" or relative.startswith(".cache/"):
             continue
-        records.append(
-            {
-                "bytes": path.stat().st_size,
-                "path": relative,
-                "sha256": file_sha256(path),
-            }
-        )
+        record = {
+            "bytes": path.stat().st_size,
+            "path": relative,
+            "sha256": file_sha256(path),
+        }
+        if relative in expected_lfs_sha256:
+            record["upstream_lfs_sha256"] = expected_lfs_sha256[relative]
+        records.append(record)
     source_index = {
         "artifact_kind": "huggingface_model_snapshot_index",
         "files": records,
