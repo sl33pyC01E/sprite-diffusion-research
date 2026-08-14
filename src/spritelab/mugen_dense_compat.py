@@ -192,6 +192,134 @@ def export_mugen_dense_autoencoder_materialization(
     return hashlib.sha256(payload).hexdigest()
 
 
+def build_mugen_dense_captioned_materialization(
+    dense_manifest_path: Path | str,
+    caption_manifest_path: Path | str,
+    *,
+    manifest_root: Path | str,
+) -> dict[str, Any]:
+    """Join literal visual captions and enable conditional-generation loading."""
+
+    dense_path = Path(dense_manifest_path).resolve()
+    dense_value = _object(json.loads(dense_path.read_bytes()), "dense manifest")
+    dense_rows = dense_value.get("records")
+    if not isinstance(dense_rows, list) or any(not isinstance(row, dict) for row in dense_rows):
+        raise ValueError("dense records are invalid")
+    reference_by_variant = {
+        _text(row, "variant_id"): _digest(
+            _object(row.get("reference"), "dense reference"),
+            "frame_array_content_sha256",
+        )
+        for row in dense_rows
+    }
+    artifact = build_mugen_dense_autoencoder_materialization(
+        dense_manifest_path,
+        manifest_root=manifest_root,
+    )
+    caption_path = Path(caption_manifest_path).resolve()
+    caption_bytes = caption_path.read_bytes()
+    caption = _object(json.loads(caption_bytes), "caption manifest")
+    if caption.get("artifact_kind") != "mugen_dense_literal_visual_caption_dataset":
+        raise ValueError("caption manifest has the wrong artifact kind")
+    caption_rows = caption.get("records")
+    if (
+        not isinstance(caption_rows, list)
+        or caption.get("record_count") != len(caption_rows)
+        or any(not isinstance(row, dict) for row in caption_rows)
+    ):
+        raise ValueError("caption record count differs")
+    caption_by_variant = {}
+    for row in caption_rows:
+        variant_id = _text(row, "variant_id")
+        if variant_id in caption_by_variant:
+            raise ValueError(f"caption manifest duplicates variant: {variant_id}")
+        structured = _object(row.get("structured_caption"), "structured caption")
+        _text(structured, "subject_type")
+        _text(row, "training_appearance_prompt")
+        if _digest(row, "reference_frame_array_content_sha256") != reference_by_variant.get(
+            variant_id
+        ):
+            raise ValueError(f"caption reference frame differs: {variant_id}")
+        caption_by_variant[variant_id] = row
+    variants = {sequence["provenance"]["variant_id"] for sequence in artifact["sequences"]}
+    if set(caption_by_variant) != variants:
+        raise ValueError("caption variant closure differs from dense materialization")
+    for sequence in artifact["sequences"]:
+        row = caption_by_variant[sequence["provenance"]["variant_id"]]
+        if (
+            row.get("identity_id") != sequence["identity_id"]
+            or row.get("split") != sequence["split"]
+        ):
+            raise ValueError(f"caption identity/split differs: {sequence['sequence_id']}")
+        sequence["caption"] = {
+            "description": row["training_appearance_prompt"],
+            "description_basis": "spark_literal_visual_structured_caption_v1",
+            "reference_frame_array_content_sha256": _digest(
+                row, "reference_frame_array_content_sha256"
+            ),
+            "request_body_sha256": _digest(row, "request_body_sha256"),
+        }
+        sequence["entity_class"] = _text(
+            _object(row.get("structured_caption"), "structured caption"),
+            "subject_type",
+        )
+        sequence["model_eligibility"] = {
+            "autoencoder_reconstruction": True,
+            "conditional_generation": True,
+        }
+    caption_sha256 = hashlib.sha256(caption_bytes).hexdigest()
+    artifact["artifact_kind"] = "mugen_dense_captioned_materialization_bridge"
+    artifact["model_eligibility"] = {
+        "autoencoder_reconstruction": True,
+        "conditional_generation": True,
+        "reason": "literal visual caption closure complete",
+    }
+    artifact["source"]["caption_manifest_file_sha256"] = caption_sha256
+    artifact["source"]["caption_manifest_path"] = str(caption_path)
+    artifact["source_snapshot"]["canonical_sha256"] = hashlib.sha256(
+        (artifact["source_snapshot"]["canonical_sha256"] + "\0" + caption_sha256).encode()
+    ).hexdigest()
+    return artifact
+
+
+def export_mugen_dense_captioned_materialization(
+    dense_manifest_path: Path | str,
+    caption_manifest_path: Path | str,
+    output_path: Path | str,
+    *,
+    disk_guard: DiskGuard | None = None,
+) -> str:
+    """Publish the caption-complete zero-copy bridge without replacement."""
+
+    output = Path(output_path).resolve()
+    if output.exists():
+        raise FileExistsError(f"Refusing to replace captioned dense bridge: {output}")
+    artifact = build_mugen_dense_captioned_materialization(
+        dense_manifest_path,
+        caption_manifest_path,
+        manifest_root=output.parent,
+    )
+    payload = _canonical(artifact)
+    (disk_guard or DiskGuard(output.anchor, 100 * 1024**3)).require_capacity(
+        len(payload), label="captioned MUGEN dense bridge"
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(f".{output.name}.{os.getpid()}.partial")
+    if temporary.exists():
+        raise FileExistsError(f"Refusing to replace temporary captioned bridge: {temporary}")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.rename(temporary, output)
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _source_root(row: dict[str, Any], manifest_root: Path) -> Path:
     root = Path(_text(row, "root")).resolve()
     if manifest_root != root and manifest_root not in root.parents:
