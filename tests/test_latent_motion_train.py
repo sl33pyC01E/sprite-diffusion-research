@@ -13,6 +13,7 @@ from spritelab.latent_motion_train import (
     _config_from_dict,
     _ema_checkpoint_artifact_kind,
     _ema_update,
+    _matched_action_contrast_loss,
     _paired_action_metrics,
     _paired_appearance_metrics,
     _sample_motion_residual,
@@ -74,6 +75,11 @@ def test_target_distinct_pairs_exclude_action_aliases() -> None:
 def test_config_requires_a_denoising_objective() -> None:
     with pytest.raises(ValueError, match="at least one denoising objective"):
         LatentMotionTrainingConfig(latent_endpoint_weight=0, pixel_endpoint_weight=0)
+
+
+def test_config_rejects_negative_action_contrast_weight() -> None:
+    with pytest.raises(ValueError, match="action_contrast_weight"):
+        LatentMotionTrainingConfig(action_contrast_weight=-0.01)
 
 
 def test_flow_config_requires_a_multistep_sampler() -> None:
@@ -200,6 +206,38 @@ def test_paired_action_metrics_reject_shape_mismatch() -> None:
             predicted_pm=target[:1],
             permuted_pm=target,
             target_pm=target,
+        )
+
+
+def test_matched_action_contrast_loss_matches_authored_delta() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 1, 1, 2, 2))
+    target[1] = 1
+
+    exact = _matched_action_contrast_loss(
+        torch,
+        estimated_clean=target,
+        target_clean=target,
+    )
+    collapsed = _matched_action_contrast_loss(
+        torch,
+        estimated_clean=torch.zeros_like(target),
+        target_clean=target,
+    )
+
+    assert exact.item() == pytest.approx(0)
+    assert collapsed.item() == pytest.approx(1)
+
+
+def test_matched_action_contrast_loss_rejects_shape_mismatch() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 1, 1, 2, 2))
+
+    with pytest.raises(ValueError, match="share one shape"):
+        _matched_action_contrast_loss(
+            torch,
+            estimated_clean=target[:1],
+            target_clean=target,
         )
 
 

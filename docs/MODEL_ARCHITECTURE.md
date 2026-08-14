@@ -672,6 +672,12 @@ sampler/trajectory behavior rather than a different input batch.
 The same external artifact contains a verb-balanced training-distribution control
 and an identity-disjoint test block. Their claims remain separate: the former tests
 fit and optimization; the latter tests transfer to characters excluded from training.
+An optional `action_contrast_weight` remains disabled in the baseline. When enabled
+for a separately named refinement, it compares the predicted clean-latent difference
+between a shared-noise same-identity action pair with that pair's authored latent
+difference. This directly penalizes action collapse without introducing identity,
+caption, or noise mismatches; it may only be activated after the baseline sampler
+controls establish that additional separation pressure is warranted.
 Each gallery row now binds three matched animations with exact paths and hashes: the
 authored target, the requested-action output, and an action-token-substituted output
 generated from the same reference, frame phases, and noise. This makes directional

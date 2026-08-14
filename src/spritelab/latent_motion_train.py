@@ -66,6 +66,7 @@ class LatentMotionTrainingConfig:
     ema_decay: float = 0.9995
     latent_endpoint_weight: float = 1.0
     pixel_endpoint_weight: float = 1.0
+    action_contrast_weight: float = 0.0
     time_sampling: TimeSampling = "uniform"
     endpoint_sample_probability: float = 0.25
     inference_steps: int = 16
@@ -118,6 +119,7 @@ class LatentMotionTrainingConfig:
             "weight_decay",
             "latent_endpoint_weight",
             "pixel_endpoint_weight",
+            "action_contrast_weight",
             "endpoint_sample_probability",
         ):
             value = getattr(self, name)
@@ -995,6 +997,7 @@ def _train(
         optimizer.zero_grad(set_to_none=True)
         accumulated_latent = 0.0
         accumulated_pixel = 0.0
+        accumulated_action_contrast = 0.0
         accumulated_loss = 0.0
         for _ in range(config.gradient_accumulation):
             selection = _sample_target_distinct_pair(train_pairs, generator=sampler_generator)
@@ -1026,12 +1029,22 @@ def _train(
                     predicted.float(), (shared_noise - clean).float()
                 )
                 generated_residual = noisy - time_view * predicted
+                action_contrast_loss = (
+                    _matched_action_contrast_loss(
+                        runtime,
+                        estimated_clean=generated_residual.float(),
+                        target_clean=clean.float(),
+                    )
+                    if config.action_contrast_weight
+                    else latent_loss.new_zeros(())
+                )
                 generated_latent = (reference.unsqueeze(1) + generated_residual) * std + mean
                 logits = decoder.decode_logits(generated_latent.reshape(-1, 8, 64, 64))
                 pixel_loss = sprite_reconstruction_loss(logits, target_rgba).total
                 loss = (
                     config.latent_endpoint_weight * latent_loss
                     + config.pixel_endpoint_weight * pixel_loss
+                    + config.action_contrast_weight * action_contrast_loss
                 )
                 scaled = loss / config.gradient_accumulation
             if not bool(runtime.isfinite(scaled)):
@@ -1039,6 +1052,7 @@ def _train(
             scaled.backward()
             accumulated_latent += float(latent_loss.detach().cpu())
             accumulated_pixel += float(pixel_loss.detach().cpu())
+            accumulated_action_contrast += float(action_contrast_loss.detach().cpu())
             accumulated_loss += float(loss.detach().cpu())
         gradient_norm = float(
             runtime.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
@@ -1070,6 +1084,9 @@ def _train(
             )
         if step == 1 or step % config.log_every == 0 or step == config.steps:
             row = {
+                "action_contrast_loss": (
+                    accumulated_action_contrast / config.gradient_accumulation
+                ),
                 "gradient_norm_before_clip": gradient_norm,
                 "latent_endpoint_loss": accumulated_latent / config.gradient_accumulation,
                 "learning_rate": learning_rate,
@@ -1527,6 +1544,25 @@ def _paired_action_metrics(
         "target_action_distance": target_distance,
         "generated_action_distance": generated_distance,
     }
+
+
+def _matched_action_contrast_loss(
+    runtime: Any,
+    *,
+    estimated_clean: Any,
+    target_clean: Any,
+) -> Any:
+    """Match the authored action delta for one same-identity two-action batch."""
+
+    expected = tuple(target_clean.shape)
+    if len(expected) != 5 or expected[0] != 2:
+        raise ValueError("matched action tensors must have shape [2,T,C,H,W]")
+    if tuple(estimated_clean.shape) != expected:
+        raise ValueError("matched action tensors must share one shape")
+    return runtime.nn.functional.mse_loss(
+        estimated_clean[0] - estimated_clean[1],
+        target_clean[0] - target_clean[1],
+    )
 
 
 def _paired_appearance_metrics(
