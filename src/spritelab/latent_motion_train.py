@@ -824,6 +824,9 @@ def _train(
     train_pairs = _target_distinct_pairs_from_index(
         train_index, _target_rgba_digests(corpus, corpus.train_indices)
     )
+    training_evaluation_selection = _balanced_matched_pairs(
+        corpus, corpus.train_indices, config.validation_pairs
+    )
     validation_selection = _validation_pairs(corpus, config.validation_pairs)
     mean = runtime.tensor(corpus.channel_mean, device=device).view(1, 1, 8, 1, 1)
     std = runtime.tensor(corpus.channel_standard_deviation, device=device).view(1, 1, 8, 1, 1)
@@ -979,12 +982,48 @@ def _train(
         sampler_algorithm=config.sampler_algorithm,
         disk_guard=disk_guard,
     )
+    final_training_evaluation = _validate(
+        runtime,
+        corpus,
+        training_evaluation_selection,
+        ema,
+        decoder,
+        device=device,
+        dtype=dtype,
+        autocast=autocast,
+        mean=mean,
+        std=std,
+        seed=config.seed + 30_000,
+        inference_steps=config.inference_steps,
+        sampler_algorithm=config.sampler_algorithm,
+    )
+    training_preview_rows = _export_validation_previews(
+        runtime,
+        corpus,
+        training_evaluation_selection[: config.preview_pairs],
+        ema,
+        decoder,
+        output=output / "training-previews",
+        device=device,
+        dtype=dtype,
+        autocast=autocast,
+        mean=mean,
+        std=std,
+        seed=config.seed + 30_000,
+        inference_steps=config.inference_steps,
+        sampler_algorithm=config.sampler_algorithm,
+        disk_guard=disk_guard,
+    )
     report = {
         "artifact_kind": "mugen_reference_latent_motion_training",
-        "claim": "held-out-identity validation of canonical reference plus action-token motion",
+        "claim": (
+            "matched in-distribution training replay plus identity-disjoint validation "
+            "of canonical reference and action-token motion"
+        ),
         "config": asdict(config),
         "corpus": corpus.contract,
         "ema_policy": _ema_policy(config),
+        "final_training_evaluation": final_training_evaluation,
         "final_validation": latest_validation,
         "history": {
             "file_sha256": _file_sha256(output / "training-history.jsonl"),
@@ -998,6 +1037,7 @@ def _train(
         "previews": preview_rows,
         "runtime": _runtime_facts(runtime, device),
         "step": config.steps,
+        "training_previews": training_preview_rows,
         "training_checkpoint": {
             "file_sha256": _file_sha256(final_checkpoint),
             "path": final_checkpoint.name,
@@ -1044,7 +1084,7 @@ def _batch(
 def _validation_pairs(
     corpus: LatentMotionTrainingCorpus, maximum_pairs: int
 ) -> tuple[tuple[int, int], ...]:
-    return _matched_pairs(corpus, corpus.validation_indices, maximum_pairs)
+    return _balanced_matched_pairs(corpus, corpus.validation_indices, maximum_pairs)
 
 
 def _matched_pairs(

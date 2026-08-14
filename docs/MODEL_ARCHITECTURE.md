@@ -624,7 +624,11 @@ explicit endpoint exposure and evaluates a 16-step Heun trajectory. Its
 reference-conditioned model uses 384-wide tokens, 12 blocks, 6 heads, and 4x4 latent
 patches. Both exact training-member probes and identity-held-out probes must report
 the sampling regime and use fixed matched noise; loss improvement alone is not an
-acceptance result.
+adequate result. The corpus trainer therefore publishes two separate final metric
+blocks and preview galleries: target-distinct, verb-balanced pairs drawn from the
+training split, and target-distinct, verb-balanced pairs drawn from identities that
+never enter training. In-distribution failure is diagnosed as model/optimization
+failure; held-out failure is reported separately as a generalization limitation.
 
 ## Historical pretrained branch (superseded; do not reacquire)
 
