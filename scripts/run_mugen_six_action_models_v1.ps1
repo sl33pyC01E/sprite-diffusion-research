@@ -166,6 +166,21 @@ function Invoke-LoggedProcess {
     }
 }
 
+function Invoke-CheckpointCompaction {
+    param([Parameter(Mandatory = $true)][string]$RunDirectory)
+    $result = Join-Path $RunDirectory 'checkpoint-compaction-result.json'
+    if (-not (Test-Path -LiteralPath $result)) {
+        & $venvPython (Join-Path $root 'scripts\compact_completed_training_checkpoints_v1.py') `
+            $RunDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw "Checkpoint compaction failed for $RunDirectory"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $result)) {
+        throw "Checkpoint compaction did not publish its result for $RunDirectory"
+    }
+}
+
 Wait-GpuIdle
 
 $textOutput = Resolve-ImmutableArtifactDirectory -Base $textBase -CompletionFile 'manifest.json'
@@ -237,6 +252,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $stillInference 'selection.json'))) 
             '--guidance-scale', '3.5'
         )
 }
+Invoke-CheckpointCompaction -RunDirectory $still.Output
 
 $motion = Resolve-TrainingLaunch -Base $motionBase
 if (-not $motion.Complete) {
@@ -277,3 +293,4 @@ if (-not (Test-Path -LiteralPath (Join-Path $motionInference 'evaluation-report.
             '--manifest', $motionManifest
         )
 }
+Invoke-CheckpointCompaction -RunDirectory $motion.Output

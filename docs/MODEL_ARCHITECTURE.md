@@ -100,6 +100,17 @@ no-clobber output directory with explicit parent lineage. A deterministic CPU sp
 test proves that resuming a two-step checkpoint to step four is tensor-for-tensor
 identical to the uninterrupted four-step run.
 
+Periodic checkpoints remain available throughout each active codec, still, and
+motion training stage so a power loss loses at most one checkpoint interval. After
+the final training report and the stage's required evaluation/export have both
+published successfully, the pipeline runs a separate hash-bound compaction step.
+It retains the earliest milestone and the report-bound final resume checkpoint,
+publishes the exact removal plan before unlinking anything, verifies every planned
+file immediately before removal, and resumes the same plan idempotently after an
+interruption. The result records every removed path, byte count, and SHA-256. This
+reclaims redundant optimizer-state checkpoints without weakening active-run recovery
+or the 100 GiB free-space floor.
+
 The active still-image experiment has one primary branch: a compact latent DiT
 trained from scratch over the custom RGBA codec, with a frozen text encoder used
 only to turn captions into conditioning vectors. No LoRA branch is authorized or

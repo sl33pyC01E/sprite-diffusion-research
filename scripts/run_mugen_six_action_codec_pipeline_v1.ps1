@@ -109,6 +109,21 @@ function Wait-GpuIdle {
     }
 }
 
+function Invoke-CheckpointCompaction {
+    param([Parameter(Mandatory = $true)][string]$RunDirectory)
+    $result = Join-Path $RunDirectory 'checkpoint-compaction-result.json'
+    if (-not (Test-Path -LiteralPath $result)) {
+        & $python (Join-Path $root 'scripts\compact_completed_training_checkpoints_v1.py') `
+            $RunDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw "Checkpoint compaction failed for $RunDirectory"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $result)) {
+        throw "Checkpoint compaction did not publish its result for $RunDirectory"
+    }
+}
+
 Wait-GpuIdle
 
 $trainingLaunch = Resolve-TrainingLaunch -Base $runBase
@@ -212,3 +227,4 @@ if (-not (Test-Path -LiteralPath $latentManifest)) {
 if (-not (Test-Path -LiteralPath $latentManifest)) {
     throw 'Broad latent export did not publish a complete manifest'
 }
+Invoke-CheckpointCompaction -RunDirectory $run
