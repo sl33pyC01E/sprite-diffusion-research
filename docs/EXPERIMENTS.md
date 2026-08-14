@@ -537,3 +537,55 @@ and the evaluation SHA-256 is
 The next quality run should instead exploit the far larger, scale-stabilized
 MUGEN action corpus while retaining semantic conditioning and the empirically
 successful endpoint objective.
+
+## MUGEN canonical appearance: sprite-prior latent LoRA
+
+The active still-image branch adapts the pinned sprite-specific Stable Diffusion
+checkpoint at revision `8229c9b6e928103f0e657cfe6b14d902cb2101d6`. Its exact
+local source index SHA-256 is
+`5f7eea291d7831ccb4d6bb07b011669f532ebd4371dee35b8743ea90fbc926df`.
+Zero-shot evaluation produced coherent pixel-character sheets but collapsed toward
+one green/blue character across unrelated descriptions; the immutable zero-shot
+report SHA-256 is
+`ebe213d2ecd888d59f2e34acad25eaa41afc3e082f93263ffb3b1aa044dff2f9`.
+
+Fine-tuning uses one Qwen-inspected canonical subject-bearing still per 227 MUGEN
+identities, with 168 train, 25 validation, and 34 test identities. Text states and
+RGB VAE latents were regenerated with this checkpoint's own differing text encoder
+and VAE; their manifest SHA-256 values are respectively
+`9584be72f8707d588a05f3ac0a52eb7e669fbcaf99631ea2a77bcf6ce0cbcc39`
+and `abe0f1180eb8d0ed8559fa47e4aae902b39548ca032e8e26f3fd4bdd1bb6d4f6`.
+The rank-32 attention-plus-resnet LoRA has 24,748,032 trainable parameters and uses
+learning rate `5e-5`, batch size one, gradient accumulation four, and bfloat16.
+
+Held-out epsilon MSE fell from `0.0559790` before adaptation to `0.0404984` at step
+500, `0.0402703` at step 1,000, `0.0401296` at step 2,000, and `0.0402462` at step
+2,500. The curve therefore largely plateaus after 500 steps. Nevertheless, exact
+same-noise images improve materially between raw step 1,000 and raw step 2,500:
+the latter better preserves the winged silhouette and the red-haired armored
+swordswoman with her sword, and produces a more coherent robot. Color and fine
+identity attributes still drift, especially for the orange monster. EMA lags raw
+at step 1,000 and becomes competitive at 2,500, but loses more prompt-specific
+details. Raw step 2,500 is selected; further still training is not authorized by
+this plateaued four-prompt gate.
+
+The selected checkpoint SHA-256 is
+`0bc6640361843d3a4b18f67f532f5e0c01c6a00392c0241544fed349b400f68f`
+and its training report SHA-256 is
+`a76ad0263e7724686fcc16926918ce17b4abacebda0fdce0458325ad92fbd9b0`.
+The raw-1,000/raw-2,500/EMA-2,500 comparison report SHA-256 is
+`1460dc6c7534fe9c85330ec168c0131d159631d0e1acdd61d68ef39fd7572503`;
+its display gallery SHA-256 is
+`9e2ea549dc4685c418f2cffd28b1c086c70dc8ab2fe1f7d7c2da857049b8ab04`.
+All generated columns use identical prompt order and initial noise SHA-256
+`2e1733bda32a253d594a600f148cd1a6eda72b975d62309fd8d73e22d6857639`.
+These are identity-held-out samples within the MUGEN caption distribution, not
+evidence of unrestricted text-to-sprite generalization.
+
+Stage two is now data- and model-contract ready. The reference-conditioned latent
+motion plan SHA-256 is
+`ad62a5c8ded8bd8b53894c6580db83ae73268de6daf1033cf65228e53e1f9558`:
+5,906 eight-frame clips, 227 identities, 20 structured verbs, and exact canonical
+reference latents. The next quality experiment trains the new reference-conditioned
+latent DiT on motion/residual latents, initially gating on block, walk/run, idle,
+normal attack, special attack, and super attack before broadening to rarer verbs.
