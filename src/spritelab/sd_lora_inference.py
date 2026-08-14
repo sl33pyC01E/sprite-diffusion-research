@@ -8,6 +8,7 @@ import os
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from PIL import Image
@@ -27,6 +28,7 @@ class SDLoraInferenceConfig:
     guidance_scale: float = 5.0
     device: str = "cuda"
     precision: str = "bfloat16"
+    weights_variant: Literal["ema", "raw"] = "ema"
 
     def __post_init__(self) -> None:
         if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
@@ -41,6 +43,8 @@ class SDLoraInferenceConfig:
             raise ValueError("guidance_scale must be finite and non-negative")
         if self.precision not in {"float32", "bfloat16"}:
             raise ValueError("precision must be float32 or bfloat16")
+        if self.weights_variant not in {"ema", "raw"}:
+            raise ValueError("weights_variant must be ema or raw")
 
 
 def run_sd14_lora_inference(
@@ -113,7 +117,11 @@ def run_sd14_lora_inference(
         ),
         adapter_name=adapter_name,
     )
-    set_peft_model_state_dict(unet, checkpoint["ema_lora"], adapter_name=adapter_name)
+    state_key = f"{experiment.weights_variant}_lora"
+    lora_state = checkpoint.get(state_key)
+    if not isinstance(lora_state, dict) or not lora_state:
+        raise SDLoraInferenceError(f"checkpoint {state_key} is absent")
+    set_peft_model_state_dict(unet, lora_state, adapter_name=adapter_name)
     tokenizer = CLIPTokenizer.from_pretrained(model_root / "tokenizer", local_files_only=True)
     overlong = [
         (prompt, len(tokenizer.encode(prompt, add_special_tokens=True)))

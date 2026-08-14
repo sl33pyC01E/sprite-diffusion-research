@@ -51,8 +51,7 @@ def main(*, stage: str, preflight_only: bool = False) -> None:
         raise ValueError("stage must be 1000 or 2500")
     canonical_checkpoint = CANONICAL_CHECKPOINTS[stage]
     action_frame_inference = (
-        ROOT
-        / f"data/inference/mugen-mffa-sd14-lora-action-frame-v2-canonical-step{stage}-control"
+        ROOT / f"data/inference/mugen-mffa-sd14-lora-action-frame-v2-canonical-step{stage}-control"
     )
     action_frame_display = (
         ROOT
@@ -63,6 +62,12 @@ def main(*, stage: str, preflight_only: bool = False) -> None:
     )
     canonical_display = (
         ROOT / f"data/inference/mugen-mffa-sd14-lora-canonical-appearance-v4-step{stage}-display-v1"
+    )
+    canonical_raw_inference = ROOT / (
+        f"data/inference/mugen-mffa-sd14-lora-canonical-appearance-v4-step{stage}-raw-heldout"
+    )
+    canonical_raw_display = ROOT / (
+        f"data/inference/mugen-mffa-sd14-lora-canonical-appearance-v4-step{stage}-raw-display-v1"
     )
     comparison_output = ROOT / (
         "data/inference/mugen-mffa-sd14-lora-action-frame-v2-vs-"
@@ -111,6 +116,17 @@ def main(*, stage: str, preflight_only: bool = False) -> None:
         config=config,
         disk_guard=guard,
     )
+    raw_config = SDLoraInferenceConfig(seed=20260823, weights_variant="raw")
+    canonical_raw_report, canonical_raw_sha256 = run_sd14_lora_inference(
+        canonical_checkpoint,
+        MODEL,
+        prompts,
+        canonical_raw_inference,
+        expected_checkpoint_sha256=_file_sha256(canonical_checkpoint),
+        expected_source_index_sha256=SOURCE_INDEX_SHA256,
+        config=raw_config,
+        disk_guard=guard,
+    )
     display_config = SpriteDisplayDecodeConfig()
     action_display, action_display_sha256 = export_inference_sprite_display_bundle(
         action_report,
@@ -126,11 +142,23 @@ def main(*, stage: str, preflight_only: bool = False) -> None:
         config=display_config,
         disk_guard=guard,
     )
+    canonical_raw_display, canonical_raw_display_sha256 = export_inference_sprite_display_bundle(
+        canonical_raw_report,
+        canonical_raw_display,
+        expected_inference_report_sha256=canonical_raw_sha256,
+        config=display_config,
+        disk_guard=guard,
+    )
     comparison, comparison_sha256 = build_sd_lora_ablation_comparison(
         [
             ("ACTION-FRAME V2 / 2,500", action_report, action_sha256),
             (
-                f"CANONICAL APPEARANCE V4 / {int(stage):,}",
+                f"CANONICAL APPEARANCE V4 RAW / {int(stage):,}",
+                canonical_raw_report,
+                canonical_raw_sha256,
+            ),
+            (
+                f"CANONICAL APPEARANCE V4 EMA / {int(stage):,}",
                 canonical_report,
                 canonical_sha256,
             ),
@@ -150,6 +178,9 @@ def main(*, stage: str, preflight_only: bool = False) -> None:
                 "canonical_display_manifest": str(canonical_display),
                 "canonical_display_manifest_sha256": canonical_display_sha256,
                 "canonical_inference_report_sha256": canonical_sha256,
+                "canonical_raw_display_manifest": str(canonical_raw_display),
+                "canonical_raw_display_manifest_sha256": canonical_raw_display_sha256,
+                "canonical_raw_inference_report_sha256": canonical_raw_sha256,
                 "comparison_report": str(comparison),
                 "comparison_report_sha256": comparison_sha256,
                 **selection,
