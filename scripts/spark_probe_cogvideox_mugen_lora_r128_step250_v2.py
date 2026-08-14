@@ -28,6 +28,7 @@ LORA_WEIGHT_NAME = os.environ.get(
     "SPRITELAB_COGVIDEOX_LORA_WEIGHT_NAME", "pytorch_lora_weights.safetensors"
 )
 TRAINING_STEPS = int(os.environ.get("SPRITELAB_COGVIDEOX_TRAINING_STEPS", "250"))
+LORA_SCALE = float(os.environ.get("SPRITELAB_COGVIDEOX_LORA_SCALE", "1.0"))
 TRAIN_LOG = ROOT / "lora-orange-fighter-native-caption-r128-step250-v2.log"
 OUTPUT = Path(
     os.environ.get(
@@ -45,6 +46,8 @@ NEGATIVE_PROMPT = (
 
 
 def main() -> None:
+    if not 0 < LORA_SCALE <= 2:
+        raise ValueError("SPRITELAB_COGVIDEOX_LORA_SCALE must be in (0, 2]")
     if OUTPUT.exists():
         raise FileExistsError(f"Refusing to replace CogVideoX LoRA probe: {OUTPUT}")
     source_index_path = MODEL / "source-index.json"
@@ -86,7 +89,7 @@ def main() -> None:
     pipe.vae.enable_tiling()
     pipe.vae.enable_slicing()
     pipe.load_lora_weights(LORA, weight_name=LORA_WEIGHT_NAME, adapter_name="mugen-action")
-    pipe.set_adapters("mugen-action", adapter_weights=1.0)
+    pipe.set_adapters("mugen-action", adapter_weights=LORA_SCALE)
     pipe.set_progress_bar_config(disable=True)
     generator = torch.Generator(device="cuda").manual_seed(SEED)
     with torch.inference_mode():
@@ -160,7 +163,7 @@ def main() -> None:
             },
             "generation": {
                 "guidance_scale": 6,
-                "lora_scale": 1.0,
+                "lora_scale": LORA_SCALE,
                 "negative_prompt": NEGATIVE_PROMPT,
                 "num_frames": 9,
                 "num_inference_steps": 50,
