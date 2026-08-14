@@ -33,6 +33,7 @@ test("server-renders the SpriteLab research console", async () => {
   assert.match(html, /<title>SpriteLab — Animated Sprite Research Console<\/title>/i);
   assert.match(html, /Describe the sprite/i);
   assert.match(html, /Hosted mode: verified replay/i);
+  assert.match(html, /Effect-only and subject-absent targets are quarantined/i);
   assert.match(html, /Memorization diagnostic/i);
   assert.match(html, /26,196(?:<!-- -->)? sequences/i);
   assert.doesNotMatch(html, /Your site is taking shape|Building your site|react-loading-skeleton/i);
@@ -54,6 +55,8 @@ test("publishes the curated evidence payload and representative animations", asy
   assert.equal(snapshot.tmwa_causal16_step_2000.idle_to_walk_moves_toward_replacement, 6);
   assert.equal(snapshot.tmwa_causal16_alpha4_step_6000.walk_correct_target_preference, 8);
   assert.equal(snapshot.tmwa_causal16_alpha4_step_6000.alpha_iou_at_127, 0.979635);
+  assert.equal(snapshot.staged_mugen_latent_motion.canonical_sequences, 1443);
+  assert.match(snapshot.staged_mugen_latent_motion.model, /latent space/i);
   assert.equal(galleryManifest.files.length, 21);
   assert.equal(
     galleryManifest.runs.tmwa_causal16_alpha4_step_6000.decode_bundle_sha256,

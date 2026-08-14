@@ -54,6 +54,18 @@ export const indexSnapshot = {
 
 export const sources: SourceRecord[] = [
   {
+    id: "mugen_mffa",
+    name: "MUGEN / MFFA anime fighters",
+    kind: "SFF sprites + AIR action timelines",
+    entities: 227,
+    sequences: 5906,
+    frames: 47248,
+    occurrences: 47248,
+    rights: 0,
+    stage: "materialized",
+    note: "Offline research corpus, separate from the live SQLite snapshot. The current latent-motion manifest keeps 1,443 canonical identity/action clips; effect-only and subject-absent frames fail closed.",
+  },
+  {
     id: "flare_empyrean",
     name: "Flare: Empyrean Campaign",
     kind: "game animation definitions",
@@ -492,10 +504,10 @@ export const pipelineStages = [
   {
     id: "train",
     index: "07",
-    title: "PixelDiT",
+    title: "Latent motion DiT",
     status: "research",
-    summary: "Native RGBA rectified flow with spatial/temporal attention and explicit control tokens.",
-    details: "Current evidence is bounded memorization; semantic text and held-out generalization remain open.",
+    summary: "A canonical sprite reference plus action tokens drive spatiotemporal flow in a frozen sprite-autoencoder latent space.",
+    details: "The broad MUGEN run uses 1,443 canonical clips across 225 identities. Direct-pixel PixelDiT remains a historical baseline; held-out action transfer is the deciding test.",
   },
   {
     id: "evaluate",
