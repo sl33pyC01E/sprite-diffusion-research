@@ -97,6 +97,36 @@ license/readme evidence. Compilation membership never replaces original creator
 attribution. Anime franchise identity and fan distribution do not imply reuse
 permission; rights evidence and training inclusion policy remain separate facts.
 
+### Mikazuki roster-scale discovery
+
+The public [Mikazuki MUGEN roster page](https://sites.google.com/view/mikazukithemugenitecreations/mugen-rosters)
+was indexed as landing-page metadata before any additional archive acquisition.
+The corrected immutable index is
+`data/index/reports/mugen-mikazuki-roster-discovery-v2.json`, SHA-256
+`31ac109cbe8a7766bce4b83faad65f515fae7b8ef2616daa8a1156feacb608e7`.
+Its exact 710,508-byte HTML snapshot is retained in CAS with SHA-256
+`e271dfc02453af6cd9e9841e25d1a6c7eb18383dca4b5e4309de29512c1f159e`.
+The earlier v1 index is retained rather than overwritten; v2 corrects only the
+claimed-character-count heuristic for titles such as `1100+ JUS CHARS`.
+
+The v2 page census contains 125 linked roster sections, 120 with downloads, 185
+unique archive-entry URLs, and 68 YouTube preview occurrences. Providers are 94
+Google Drive, 66 MediaFire, 10 TeraBox, 6 MEGA, 5 link-shortener, and 3 Dropbox
+URLs plus one alternate TeraBox domain. Twenty-four title-keyword priority
+sections contribute 35 download entries for anime, manga, JUS, Touhou, Melty
+Blood, Fate, Dragon Ball, and related discovery terms. Explicit page claims span
+an 1,100-character anime/JUS pack, 2,000- and 3,000-character JUS/anime packs, a
+4,000-character Anime Ascension pack, and broader compilations claiming as many
+as 18,000 characters.
+
+Those numbers are uploader page claims, not decoded or deduplicated identities.
+The keyword flag is a discovery-priority heuristic only. Preview videos remain
+metadata-only, rights remain unverified, and no newly indexed large compilation
+has yet been downloaded. Acquisition must first resolve provider metadata and
+declared sizes on Spark, enforce a 100-GiB free-space floor there as well as on
+the workstation, and prioritize anime/JUS archives likely to add identities not
+already present in the 298-archive MFFA tranche.
+
 ## First collection-scale pass
 
 The exact Simple MUGEN landing snapshot SHA-256 is
