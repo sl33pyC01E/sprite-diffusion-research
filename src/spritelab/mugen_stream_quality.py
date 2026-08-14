@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from spritelab.mugen_materialization_view import normalize_mugen_materialization
 from spritelab.storage import DiskGuard
 
 _REQUIRED_SLOTS = frozenset({"idle", "walk", "jump", "block", "attack_a", "attack_b"})
@@ -52,11 +53,9 @@ def build_mugen_stream_quality_audit(
         manifest_path = root / "materialization.json"
         payload = manifest_path.read_bytes()
         manifest = _object(json.loads(payload), "materialization")
-        if manifest.get("projection_version") != 2:
-            raise ValueError(f"quality audit requires MUGEN projection version 2: {manifest_path}")
-        rows = manifest.get("characters")
-        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-            raise ValueError(f"materialization characters are invalid: {manifest_path}")
+        digest = hashlib.sha256(payload).hexdigest()
+        view = normalize_mugen_materialization(manifest, manifest_sha256=digest)
+        rows = view.characters
         for row in rows:
             variant_id = _text(row, "variant_id")
             if variant_id in seen_variants:
@@ -66,8 +65,9 @@ def build_mugen_stream_quality_audit(
         source_rows.append(
             {
                 "character_count": len(rows),
-                "manifest_file_sha256": hashlib.sha256(payload).hexdigest(),
+                "manifest_file_sha256": digest,
                 "manifest_path": str(manifest_path),
+                "projection_contract": view.projection_contract,
             }
         )
 
@@ -132,7 +132,7 @@ def export_mugen_stream_quality_audit(
         raise FileExistsError(f"Refusing to replace quality audit: {output}")
     artifact = build_mugen_stream_quality_audit(materialization_roots, policy=policy)
     payload = _canonical(artifact)
-    guard = disk_guard or DiskGuard(output.anchor, 100 * 1024**3)
+    guard = disk_guard or DiskGuard(Path(output.anchor), 100 * 1024**3)
     guard.require_capacity(len(payload), label="MUGEN streamed quality audit")
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.{os.getpid()}.partial")

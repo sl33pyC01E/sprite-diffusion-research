@@ -135,7 +135,7 @@ def export_mugen_dense_still_training_plan(
         raise FileExistsError(f"Refusing to replace dense still plan: {output}")
     artifact = build_mugen_dense_still_training_plan(captioned_materialization_path)
     payload = _canonical(artifact)
-    (disk_guard or DiskGuard(output.anchor, 100 * 1024**3)).require_capacity(
+    (disk_guard or DiskGuard(Path(output.anchor), 100 * 1024**3)).require_capacity(
         len(payload), label="MUGEN dense still training plan"
     )
     output.parent.mkdir(parents=True, exist_ok=True)

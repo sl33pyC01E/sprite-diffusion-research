@@ -11,6 +11,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Literal
 
+from spritelab.mugen_materialization_view import (
+    materialization_identity_labels,
+    normalize_mugen_materialization,
+)
 from spritelab.storage import DiskGuard
 
 MugenQualityTier = Literal["broad", "dense"]
@@ -55,15 +59,13 @@ def build_mugen_dense_manifest(
         if audited_sources.get(str(manifest_path)) != digest:
             raise ValueError(f"quality audit does not bind materialization: {manifest_path}")
         materialization = _object(json.loads(payload), "materialization")
-        if materialization.get("projection_version") != 2:
-            raise ValueError("dense manifest requires MUGEN projection version 2")
-        rows = materialization.get("characters")
-        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-            raise ValueError("materialization characters are invalid")
+        view = normalize_mugen_materialization(materialization, manifest_sha256=digest)
+        rows = view.characters
         source_rows.append(
             {
                 "manifest_file_sha256": digest,
                 "manifest_path": str(manifest_path),
+                "projection_contract": view.projection_contract,
                 "root": str(root),
                 "source_index": source_index,
             }
@@ -114,7 +116,7 @@ def build_mugen_dense_manifest(
         definitions = character.get("definitions")
         if not isinstance(definitions, list):
             raise ValueError(f"definitions are invalid: {variant_id}")
-        label = _identity_label(definitions, variant_id)
+        label = _identity_label(character, variant_id)
         actions = []
         for slot, clip in sorted(by_slot.items()):
             array = _object(clip.get("array"), "clip array")
@@ -259,7 +261,7 @@ def export_mugen_dense_manifest(
         raise FileExistsError(f"Refusing to replace dense manifest: {output}")
     artifact = build_mugen_dense_manifest(materialization_roots, quality_audit_path, tier=tier)
     payload = _canonical(artifact)
-    guard = disk_guard or DiskGuard(output.anchor, 100 * 1024**3)
+    guard = disk_guard or DiskGuard(Path(output.anchor), 100 * 1024**3)
     guard.require_capacity(len(payload), label="MUGEN dense training manifest")
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.{os.getpid()}.partial")
@@ -303,16 +305,10 @@ def _leakage_components(
         source = _object(character.get("source"), "character source")
         sff = _object(source.get("sff"), "character source SFF")
         tokens = {"sff:" + _sha256_text(sff, "sha256")}
-        definitions = character.get("definitions")
-        if not isinstance(definitions, list):
-            raise ValueError(f"definitions are invalid: {variant_id}")
         identity_labels = {
             normalized
-            for definition in definitions
-            if isinstance(definition, dict)
-            for key in ("display_name", "name")
-            if isinstance(definition.get(key), str)
-            if (normalized := _normalized_identity_label(definition[key]))
+            for value in materialization_identity_labels(character)
+            if (normalized := _normalized_identity_label(value))
         }
         tokens.update("identity_label:" + value for value in identity_labels)
         for clip in by_slot.values():
@@ -362,15 +358,9 @@ def _split(digest: str) -> str:
     return "train" if bucket < 900 else "validation" if bucket < 950 else "test"
 
 
-def _identity_label(definitions: list[Any], variant_id: str) -> str:
-    for definition in definitions:
-        if not isinstance(definition, dict):
-            continue
-        for key in ("display_name", "name"):
-            value = definition.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return variant_id
+def _identity_label(character: dict[str, Any], variant_id: str) -> str:
+    labels = materialization_identity_labels(character)
+    return labels[0] if labels else variant_id
 
 
 def _normalized_identity_label(value: str) -> str:

@@ -205,7 +205,7 @@ def export_mugen_dense_motion_artifacts(
     output = Path(output_directory).resolve()
     if output.exists():
         raise FileExistsError(f"Refusing to replace dense motion artifacts: {output}")
-    guard = disk_guard or DiskGuard(output.anchor, 100 * 1024**3)
+    guard = disk_guard or DiskGuard(Path(output.anchor), 100 * 1024**3)
     guard.require_capacity(256 * 1024**2, label="dense MUGEN motion plans")
     stage = output.with_name(f".{output.name}.{os.getpid()}.partial")
     if stage.exists():

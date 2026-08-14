@@ -171,7 +171,7 @@ def export_mugen_dense_autoencoder_materialization(
         manifest_root=output.parent,
     )
     payload = _canonical(artifact)
-    (disk_guard or DiskGuard(output.anchor, 100 * 1024**3)).require_capacity(
+    (disk_guard or DiskGuard(Path(output.anchor), 100 * 1024**3)).require_capacity(
         len(payload), label="MUGEN dense autoencoder bridge"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -307,7 +307,7 @@ def export_mugen_dense_captioned_materialization(
         manifest_root=output.parent,
     )
     payload = _canonical(artifact)
-    (disk_guard or DiskGuard(output.anchor, 100 * 1024**3)).require_capacity(
+    (disk_guard or DiskGuard(Path(output.anchor), 100 * 1024**3)).require_capacity(
         len(payload), label="captioned MUGEN dense bridge"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
