@@ -516,3 +516,29 @@ output frames/slots (reasons can overlap). The canonical quality audit is
 the dense manifest is
 `data/processed/mugen-legacy-six-action-dense-v1.json`, SHA-256
 `60fb4bdfc1b78fa766b5c4f44051e6c77c1857f592abe4e7058f564df9dc17b4`.
+
+The six-slot view is a first dense denominator, not a fixed model vocabulary. The
+official Elecbyte AIR standard assigns reserved animation numbers for standing,
+turning, crouching, forward/backward walking, five jump phases, running/back-hopping,
+standing/crouching/aerial guard phases, loss/win/intro/taunt, hit reactions, falling,
+lying down, and recovery; it also recommends the ranges 200-999 for normal attacks,
+1000-2999 for special attacks, and 3000-4999 for hyper attacks
+(https://www.elecbyte.com/mugendocs/air.html). The architecture and manifest schemas
+therefore retain literal action numbers and can add these verbs without changing the
+DiT geometry.
+
+Across the 5,766 pre-deduplication JUS plus Ascension variants, exact action-presence
+counts already support a much wider follow-up view. Both walking actions 20/21 occur
+in 5,670 variants; crouch actions 10/11/12 in 5,497; jump actions
+40/41/42/43/47 in 5,563; run/hop actions 100/105 in 5,485; all three guard-hold
+actions 130/131/132 in 5,477; all three guard-end actions 140/141/142 in 5,466;
+and all three guard-hit actions 150/151/152 in 5,447. The light high/low/crouch hit
+set 5000/5010/5020 occurs in 5,575 variants, while fall/ground/lie/get-up actions
+5050/5100/5110/5120 occur in 5,626. At least one normal-range attack occurs in
+5,627 variants, one special-range action in 5,269, one hyper-range action in 4,612,
+one win action 180-189 in 5,447, intro 190 in 4,555, and taunt 195 in 3,108.
+These are occurrence counts before exact cross-archive deduplication and pixel
+renderability checks; they establish data availability, not final admission counts.
+The next extended projector should use the engine-reserved labels literally and
+retain generic range labels for attacks unless CMD/CNS evidence proves a more
+specific move name or strength.
