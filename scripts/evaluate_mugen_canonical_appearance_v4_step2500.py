@@ -27,27 +27,17 @@ ACTION_FRAME_CHECKPOINT = (
     / "data/experiments/mugen-mffa-sd14-lora-subject-bearing-v2-10000"
     / "training-step-0002500.pt"
 )
-CANONICAL_CHECKPOINT = (
-    ROOT
-    / "data/experiments/mugen-mffa-sd14-lora-canonical-appearance-v4-10000"
-    / "training-step-0002500.pt"
-)
+CANONICAL_CHECKPOINTS = {
+    "1000": ROOT
+    / "data/experiments/mugen-mffa-sd14-lora-canonical-appearance-v4-step1000"
+    / "training-step-0001000.pt",
+    "2500": ROOT
+    / "data/experiments/mugen-mffa-sd14-lora-canonical-appearance-v4-step2500-continuation-v1"
+    / "training-step-0002500.pt",
+}
 PLAN = ROOT / "data/processed/mugen-mffa-canonical-appearance-still-plan-v4.json"
 MODEL = ROOT / "data/models/stable-diffusion-v1-4-eb7ecef2ce03-training-components"
 SOURCE_INDEX_SHA256 = "6c02b65f1d657f8db316c4976248b0ca6d2406b3396025e801b45c3ef6a91b47"
-ACTION_FRAME_INFERENCE = (
-    ROOT / "data/inference/mugen-mffa-sd14-lora-action-frame-v2-on-canonical-prompts-v1"
-)
-CANONICAL_INFERENCE = (
-    ROOT / "data/inference/mugen-mffa-sd14-lora-canonical-appearance-v4-step2500-heldout"
-)
-ACTION_FRAME_DISPLAY = (
-    ROOT / "data/inference/mugen-mffa-sd14-lora-action-frame-v2-canonical-display-v1"
-)
-CANONICAL_DISPLAY = ROOT / "data/inference/mugen-mffa-sd14-lora-canonical-appearance-v4-display-v1"
-COMPARISON = (
-    ROOT / "data/inference/mugen-mffa-sd14-lora-action-frame-v2-vs-canonical-appearance-v4-step2500"
-)
 IDENTITIES = (
     "mugen_6602b0aa83934ced_5950baeb1fad85d9",
     "mugen_303702787c067e97_27db79521ab654b5",
@@ -56,7 +46,28 @@ IDENTITIES = (
 )
 
 
-def main(*, preflight_only: bool = False) -> None:
+def main(*, stage: str, preflight_only: bool = False) -> None:
+    if stage not in CANONICAL_CHECKPOINTS:
+        raise ValueError("stage must be 1000 or 2500")
+    canonical_checkpoint = CANONICAL_CHECKPOINTS[stage]
+    action_frame_inference = (
+        ROOT
+        / f"data/inference/mugen-mffa-sd14-lora-action-frame-v2-canonical-step{stage}-control"
+    )
+    action_frame_display = (
+        ROOT
+        / f"data/inference/mugen-mffa-sd14-lora-action-frame-v2-canonical-step{stage}-display-v1"
+    )
+    canonical_inference = (
+        ROOT / f"data/inference/mugen-mffa-sd14-lora-canonical-appearance-v4-step{stage}-heldout"
+    )
+    canonical_display = (
+        ROOT / f"data/inference/mugen-mffa-sd14-lora-canonical-appearance-v4-step{stage}-display-v1"
+    )
+    comparison_output = ROOT / (
+        "data/inference/mugen-mffa-sd14-lora-action-frame-v2-vs-"
+        f"canonical-appearance-v4-step{stage}"
+    )
     plan = json.loads(PLAN.read_text(encoding="utf-8"))
     by_identity = {record["identity_id"]: record for record in plan["records"]}
     selected = []
@@ -69,9 +80,11 @@ def main(*, preflight_only: bool = False) -> None:
         selected.append(record)
     prompts = [record["prompt"] for record in selected]
     selection = {
+        "canonical_checkpoint": str(canonical_checkpoint),
         "heldout_splits": [record["split"] for record in selected],
         "prompts": prompts,
         "selected_sequences": [record["sequence_id"] for record in selected],
+        "stage": stage,
     }
     if preflight_only:
         print(json.dumps(selection, sort_keys=True))
@@ -82,18 +95,18 @@ def main(*, preflight_only: bool = False) -> None:
         ACTION_FRAME_CHECKPOINT,
         MODEL,
         prompts,
-        ACTION_FRAME_INFERENCE,
+        action_frame_inference,
         expected_checkpoint_sha256=_file_sha256(ACTION_FRAME_CHECKPOINT),
         expected_source_index_sha256=SOURCE_INDEX_SHA256,
         config=config,
         disk_guard=guard,
     )
     canonical_report, canonical_sha256 = run_sd14_lora_inference(
-        CANONICAL_CHECKPOINT,
+        canonical_checkpoint,
         MODEL,
         prompts,
-        CANONICAL_INFERENCE,
-        expected_checkpoint_sha256=_file_sha256(CANONICAL_CHECKPOINT),
+        canonical_inference,
+        expected_checkpoint_sha256=_file_sha256(canonical_checkpoint),
         expected_source_index_sha256=SOURCE_INDEX_SHA256,
         config=config,
         disk_guard=guard,
@@ -101,14 +114,14 @@ def main(*, preflight_only: bool = False) -> None:
     display_config = SpriteDisplayDecodeConfig()
     action_display, action_display_sha256 = export_inference_sprite_display_bundle(
         action_report,
-        ACTION_FRAME_DISPLAY,
+        action_frame_display,
         expected_inference_report_sha256=action_sha256,
         config=display_config,
         disk_guard=guard,
     )
     canonical_display, canonical_display_sha256 = export_inference_sprite_display_bundle(
         canonical_report,
-        CANONICAL_DISPLAY,
+        canonical_display,
         expected_inference_report_sha256=canonical_sha256,
         config=display_config,
         disk_guard=guard,
@@ -116,10 +129,14 @@ def main(*, preflight_only: bool = False) -> None:
     comparison, comparison_sha256 = build_sd_lora_ablation_comparison(
         [
             ("ACTION-FRAME V2 / 2,500", action_report, action_sha256),
-            ("CANONICAL APPEARANCE V4 / 2,500", canonical_report, canonical_sha256),
+            (
+                f"CANONICAL APPEARANCE V4 / {int(stage):,}",
+                canonical_report,
+                canonical_sha256,
+            ),
         ],
         PLAN,
-        COMPARISON,
+        comparison_output,
         target_sequence_ids=selection["selected_sequences"],
         display_decode_config=display_config,
         disk_guard=guard,
@@ -152,6 +169,7 @@ def _file_sha256(path: Path) -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--stage", choices=("1000", "2500"), default="1000")
     parser.add_argument("--preflight-only", action="store_true")
     arguments = parser.parse_args()
-    main(preflight_only=arguments.preflight_only)
+    main(stage=arguments.stage, preflight_only=arguments.preflight_only)
