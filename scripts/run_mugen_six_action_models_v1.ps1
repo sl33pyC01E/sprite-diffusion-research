@@ -314,7 +314,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $stillInference 'selection.json'))) 
             '--codec-checkpoint', $codecCheckpoint,
             '--text-model', $clipModel,
             '--output', $stillInference,
-            '--per-split', '4',
+            '--per-split', '8',
             '--sample-steps', '32',
             '--guidance-scale', '3.5'
         )
