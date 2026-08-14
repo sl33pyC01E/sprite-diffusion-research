@@ -467,10 +467,14 @@ def _train(
         }
     sampler_index = build_hierarchical_sampler_index(corpus.rows, corpus.train_indices)
     eligible_frames = tuple(row.eligible_frame_indices for row in corpus.rows)
+    training_evaluation_selection = _split_selection(
+        corpus, corpus.train_indices, config.validation_rows
+    )
     validation_selection = _validation_selection(corpus, config.validation_rows)
     dtype = runtime.bfloat16 if config.precision == "bfloat16" else runtime.float32
     autocast = config.precision == "bfloat16"
     model.train()
+    latest_validation = None
     for step_index in range(start_step, config.steps):
         step = step_index + 1
         learning_rate = _learning_rate(step, config)
@@ -531,7 +535,7 @@ def _train(
         _ema_update(runtime, ema, model, config.ema_decay)
         validation = None
         if step == 1 or step % config.validate_every == 0 or step == config.steps:
-            validation = _validate(
+            latest_validation = _validate(
                 runtime,
                 corpus,
                 validation_selection,
@@ -541,6 +545,7 @@ def _train(
                 autocast=autocast,
                 seed=config.seed + 20_000,
             )
+            validation = latest_validation
         if step == 1 or step % config.log_every == 0 or step == config.steps:
             record = {
                 "conditioning_dropout_fraction": dropout_fraction / config.gradient_accumulation,
@@ -588,6 +593,16 @@ def _train(
         },
         disk_guard=disk_guard,
     )
+    final_training_evaluation = _validate(
+        runtime,
+        corpus,
+        training_evaluation_selection,
+        ema,
+        device=device,
+        dtype=dtype,
+        autocast=autocast,
+        seed=config.seed + 30_000,
+    )
     report = {
         "artifact_kind": "mugen_latent_still_dit_training",
         "claim": (
@@ -596,6 +611,8 @@ def _train(
         ),
         "config": asdict(config),
         "corpus": corpus.contract,
+        "final_training_evaluation": final_training_evaluation,
+        "final_validation": latest_validation,
         "history": {
             "file_sha256": _file_sha256(output / "training-history.jsonl"),
             "path": "training-history.jsonl",
@@ -653,8 +670,16 @@ def _training_batch(
 def _validation_selection(
     corpus: LatentStillCorpus, maximum_rows: int
 ) -> tuple[tuple[int, int], ...]:
+    return _split_selection(corpus, corpus.validation_indices, maximum_rows)
+
+
+def _split_selection(
+    corpus: LatentStillCorpus,
+    indices: tuple[int, ...],
+    maximum_rows: int,
+) -> tuple[tuple[int, int], ...]:
     by_identity = {}
-    for index in corpus.validation_indices:
+    for index in indices:
         by_identity.setdefault(corpus.rows[index].identity_id, index)
     selected = [by_identity[key] for key in sorted(by_identity, key=str.encode)[:maximum_rows]]
     return tuple((index, corpus.rows[index].eligible_frame_indices[0]) for index in selected)

@@ -593,6 +593,10 @@ rectified-flow objective with an explicit 25% pure-noise endpoint mixture,
 10% classifier-free text dropout, BF16 activations, FP32 parameters, EMA, and
 identity-disjoint validation.  Periodic safe-loadable checkpoints retain the
 optimizer and all sampler/flow/dropout RNG states for power-loss continuation.
+Its final report keeps fixed-noise latent metrics for both exact training identities
+and identity-disjoint validation identities in separate fields; decoded RGBA sampling
+and target comparisons remain a mandatory post-training evaluation rather than being
+inferred from either loss.
 
 Earlier Stable Diffusion adapter experiments are historical evidence only. They are
 not an active control, are not part of the training sequence, and must not trigger

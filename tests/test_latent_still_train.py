@@ -249,3 +249,6 @@ def test_corpus_loader_verifies_plan_latent_and_text_closure(tmp_path) -> None:
     checkpoint = torch.load(result.training_checkpoint_path, map_location="cpu", weights_only=True)
     assert checkpoint["step"] == 2
     assert result.report_path.is_file()
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert report["final_training_evaluation"]["endpoint_velocity_mse"] >= 0
+    assert report["final_validation"]["endpoint_velocity_mse"] >= 0
