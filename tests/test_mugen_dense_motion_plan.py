@@ -186,3 +186,60 @@ def test_dense_motion_plan_accepts_verified_broad_latent_superset(tmp_path: Path
     assert scope["joined_sequences"] == 12
     assert scope["unused_latent_sequences"] == 6
     assert scope["source_materialization_path"] == str(broad_materialization.resolve())
+
+
+def test_dense_motion_plan_does_not_require_caption_closure(tmp_path: Path) -> None:
+    captioned, latent = _fixture(tmp_path)
+    bridge = json.loads(captioned.read_bytes())
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for sequence in bridge["sequences"]:
+        grouped.setdefault(sequence["identity_id"], []).append(sequence)
+    records = []
+    for identity_id, sequences in sorted(grouped.items()):
+        idle = next(row for row in sequences if row["action"] == "idle")
+        records.append(
+            {
+                "actions": [
+                    {
+                        "array": {
+                            **row["output"],
+                            "relative_path": row["output"]["relative_path"],
+                        },
+                        "loop_mode": row["loop_mode"],
+                        "record_id": row["sequence_id"],
+                        "slot": row["action"],
+                        "temporal_selection": {
+                            "target_phases": row["timing"]["phase"],
+                        },
+                    }
+                    for row in sequences
+                ],
+                "identity_id": identity_id,
+                "reference": {
+                    "frame_array_content_sha256": idle["caption"][
+                        "reference_frame_array_content_sha256"
+                    ],
+                    "frame_index": idle["caption"]["reference_frame_index"],
+                },
+                "source_index": 0,
+                "split": idle["split"],
+            }
+        )
+    dense = {
+        "artifact_kind": "mugen_dense_reference_motion_training_manifest",
+        "records": records,
+        "schema_version": 1,
+        "source_materializations": [{"root": str(tmp_path)}],
+    }
+    dense_path = tmp_path / "dense-uncaptioned.json"
+    dense_path.write_text(json.dumps(dense), encoding="utf-8")
+
+    plan = build_mugen_dense_motion_plan(dense_path, latent)
+
+    assert plan["counts"]["sequences"] == 18
+    assert plan["source"]["materialization"]["artifact_kind"] == (
+        "mugen_dense_reference_motion_training_manifest"
+    )
+    assert plan["training_contract"]["reference"] == (
+        "exact_dense_selected_idle_temporal_medoid_latent"
+    )

@@ -15,18 +15,22 @@ from spritelab.storage import DiskGuard
 
 
 def build_mugen_dense_motion_plan(
-    captioned_materialization_path: Path | str,
+    materialization_path_value: Path | str,
     latent_manifest_path: Path | str,
 ) -> dict[str, Any]:
     """Join exact source clips, codec latents, idle references, and actions."""
 
-    materialization_path = Path(captioned_materialization_path).resolve()
+    materialization_path = Path(materialization_path_value).resolve()
     latent_path = Path(latent_manifest_path).resolve()
     materialization_bytes = materialization_path.read_bytes()
     latent_bytes = latent_path.read_bytes()
     materialization = _object(json.loads(materialization_bytes), "materialization")
     latent = _object(json.loads(latent_bytes), "latent manifest")
-    if materialization.get("artifact_kind") != "mugen_dense_captioned_materialization_bridge":
+    materialization_kind = materialization.get("artifact_kind")
+    if materialization_kind not in {
+        "mugen_dense_captioned_materialization_bridge",
+        "mugen_dense_reference_motion_training_manifest",
+    }:
         raise ValueError("materialization has the wrong artifact kind")
     if latent.get("artifact_kind") != "mugen_frozen_rgba_autoencoder_latent_cache":
         raise ValueError("latent manifest has the wrong artifact kind")
@@ -41,7 +45,13 @@ def build_mugen_dense_motion_plan(
     ).hexdigest()
     if latent_source.get("materialization_file_sha256") != latent_source_materialization_sha256:
         raise ValueError("latent cache source materialization hash differs")
-    sequences = _counted(materialization, "sequences", "sequence_count", "materialization")
+    if materialization_kind == "mugen_dense_reference_motion_training_manifest":
+        sequences = _raw_dense_sequences(
+            materialization,
+            relative_root=latent_source_materialization_path.parent,
+        )
+    else:
+        sequences = _counted(materialization, "sequences", "sequence_count", "materialization")
     latent_rows = _counted(latent, "records", "record_count", "latent manifest")
     latent_by_sequence = _unique(latent_rows, "sequence_id", "latent manifest")
     sequence_by_id = _unique(sequences, "sequence_id", "materialization")
@@ -135,6 +145,7 @@ def build_mugen_dense_motion_plan(
                 },
             },
             "materialization": {
+                "artifact_kind": materialization_kind,
                 "file_sha256": materialization_sha256,
                 "path": str(materialization_path),
             },
@@ -142,7 +153,7 @@ def build_mugen_dense_motion_plan(
         "training_contract": {
             "action_vocabulary": sorted(action_counts),
             "identity_component_split_disjoint": True,
-            "reference": "exact_caption_selected_idle_temporal_medoid_latent",
+            "reference": "exact_dense_selected_idle_temporal_medoid_latent",
             "stage": "canonical_still_plus_action_token_to_latent_animation",
             "target": "ordered_eight_frame_rgba_codec_motion_residual",
         },
@@ -210,7 +221,7 @@ def build_mugen_dense_motion_training_manifest(
 
 
 def export_mugen_dense_motion_artifacts(
-    captioned_materialization_path: Path | str,
+    materialization_path: Path | str,
     latent_manifest_path: Path | str,
     output_directory: Path | str,
     *,
@@ -229,7 +240,7 @@ def export_mugen_dense_motion_artifacts(
     stage.mkdir(parents=True)
     final_plan = output / "motion-plan.json"
     try:
-        plan = build_mugen_dense_motion_plan(captioned_materialization_path, latent_manifest_path)
+        plan = build_mugen_dense_motion_plan(materialization_path, latent_manifest_path)
         plan_payload = _canonical(plan)
         stage_plan = stage / "motion-plan.json"
         _write(stage_plan, plan_payload)
@@ -247,6 +258,103 @@ def export_mugen_dense_motion_artifacts(
             stage.rmdir()
         raise
     return hashlib.sha256(plan_payload).hexdigest(), hashlib.sha256(training_payload).hexdigest()
+
+
+def _raw_dense_sequences(
+    materialization: dict[str, Any], *, relative_root: Path
+) -> list[dict[str, Any]]:
+    """Project the audited dense schema without requiring appearance captions.
+
+    Motion conditioning consumes only the exact idle reference, action token,
+    and phase.  Caption closure belongs to the independent text-to-still stage.
+    """
+
+    if materialization.get("schema_version") != 1:
+        raise ValueError("dense materialization schema version is unsupported")
+    records = materialization.get("records")
+    sources = materialization.get("source_materializations")
+    if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
+        raise ValueError("dense materialization records are invalid")
+    if not isinstance(sources, list) or any(not isinstance(row, dict) for row in sources):
+        raise ValueError("dense materialization sources are invalid")
+    roots = [Path(_text(row, "root")).resolve() for row in sources]
+    sequences: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        identity_id = _text(record, "identity_id")
+        source_index = record.get("source_index")
+        if isinstance(source_index, bool) or not isinstance(source_index, int):
+            raise ValueError(f"dense source index is invalid: {identity_id}")
+        if not 0 <= source_index < len(roots):
+            raise ValueError(f"dense source index is out of range: {identity_id}")
+        reference = _object(record.get("reference"), "dense reference")
+        reference_frame_index = reference.get("frame_index")
+        if (
+            isinstance(reference_frame_index, bool)
+            or not isinstance(reference_frame_index, int)
+            or not 0 <= reference_frame_index < 8
+        ):
+            raise ValueError(f"dense reference frame index is invalid: {identity_id}")
+        reference_sha256 = _digest(reference, "frame_array_content_sha256")
+        actions = record.get("actions")
+        if not isinstance(actions, list) or any(not isinstance(row, dict) for row in actions):
+            raise ValueError(f"dense actions are invalid: {identity_id}")
+        for action in actions:
+            sequence_id = _text(action, "record_id")
+            if sequence_id in seen:
+                raise ValueError(f"dense materialization duplicates sequence: {sequence_id}")
+            seen.add(sequence_id)
+            array = _object(action.get("array"), "dense action array")
+            source_path = roots[source_index].joinpath(_text(array, "relative_path")).resolve()
+            if (
+                roots[source_index] != source_path
+                and roots[source_index] not in source_path.parents
+            ):
+                raise ValueError(f"dense action array escapes source root: {sequence_id}")
+            try:
+                relative_path = source_path.relative_to(relative_root).as_posix()
+            except ValueError as error:
+                raise ValueError(
+                    f"dense action array is outside latent materialization root: {sequence_id}"
+                ) from error
+            temporal = _object(action.get("temporal_selection"), "temporal selection")
+            phases = _float_list(temporal.get("target_phases"), "target phases", 8)
+            loop_mode = _text(action, "loop_mode")
+            if loop_mode == "loop":
+                if phases[0] != 0.0 or any(not 0 <= value < 1 for value in phases):
+                    raise ValueError(f"loop phases are invalid: {sequence_id}")
+            elif loop_mode == "one_shot":
+                if phases[0] != 0.0 or phases[-1] != 1.0:
+                    raise ValueError(f"one-shot phases are invalid: {sequence_id}")
+            else:
+                raise ValueError(f"loop mode is invalid: {sequence_id}")
+            sequences.append(
+                {
+                    "action": _text(action, "slot"),
+                    "caption": {
+                        "reference_frame_array_content_sha256": reference_sha256,
+                        "reference_frame_index": reference_frame_index,
+                    },
+                    "direction": "unknown",
+                    "entity_class": "unknown",
+                    "identity_id": identity_id,
+                    "loop_mode": loop_mode,
+                    "output": {
+                        "array_content_sha256": _digest(array, "array_content_sha256"),
+                        "file_sha256": _digest(array, "file_sha256"),
+                        "relative_path": relative_path,
+                        "shape": [8, 128, 128, 4],
+                    },
+                    "sequence_id": sequence_id,
+                    "split": _text(record, "split"),
+                    "timing": {
+                        "duration_ms": [125.0] * 8,
+                        "phase": phases,
+                    },
+                    "view": "side",
+                }
+            )
+    return sequences
 
 
 def _reference_record(

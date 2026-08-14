@@ -17,6 +17,7 @@ $experiments = Join-Path $root 'data\experiments'
 $inference = Join-Path $root 'data\inference'
 $stillPlan = Join-Path $processed 'mugen-six-action-broad-still-plan-v1.json'
 $latents = Join-Path $processed 'mugen-six-action-broad-rgba-latents-2x-v1\manifest.json'
+$coverageDense = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-v1.json'
 $coverageCaptioned = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-captioned-v1.json'
 $textBase = Join-Path $processed 'mugen-six-action-broad-sd14-clip-token-states-v1'
 $motionArtifactsBase = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-motion-v1'
@@ -25,20 +26,14 @@ $motionBase = Join-Path $experiments 'mugen-six-action-dense-latent-motion-scrat
 $clipModel = Join-Path $root 'data\models\stable-diffusion-v1-4-eb7ecef2ce03-training-components'
 $clipIndexSha256 = '6c02b65f1d657f8db316c4976248b0ca6d2406b3396025e801b45c3ef6a91b47'
 
-foreach ($processId in @(
-    $WaitForCaptionProcessId,
-    $WaitForCoverageCaptionJoinId,
-    $WaitForCodecProcessId
-)) {
+foreach ($processId in @($WaitForCodecProcessId)) {
     if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
         Wait-Process -Id $processId
     }
 }
 foreach ($input in @(
-    $stillPlan,
     $latents,
-    $coverageCaptioned,
-    (Join-Path $clipModel 'source-index.json')
+    $coverageDense
 )) {
     if (-not (Test-Path -LiteralPath $input)) {
         throw "Model-pipeline input is incomplete: $input"
@@ -178,6 +173,78 @@ function Invoke-CheckpointCompaction {
     }
     if (-not (Test-Path -LiteralPath $result)) {
         throw "Checkpoint compaction did not publish its result for $RunDirectory"
+    }
+}
+
+# Motion consumes the exact idle reference, action token, and target phase; it
+# has no text-conditioning path.  Run it as soon as codec latents exist while
+# Spark continues the independent appearance-caption stage.
+$motionArtifacts = Resolve-ImmutableArtifactDirectory `
+    -Base $motionArtifactsBase -CompletionFile 'training-manifest.json'
+$motionManifest = Join-Path $motionArtifacts 'training-manifest.json'
+if (-not (Test-Path -LiteralPath $motionManifest)) {
+    Invoke-LoggedProcess -Executable $venvPython `
+        -LogStem (Split-Path $motionArtifacts -Leaf) -Arguments @(
+            (Join-Path $root 'scripts\build_mugen_dense_motion_plan_v1.py'),
+            $coverageDense,
+            $latents,
+            $motionArtifacts
+        )
+}
+
+$motion = Resolve-TrainingLaunch -Base $motionBase
+if (-not $motion.Complete) {
+    Wait-GpuIdle
+    $arguments = @(
+        (Join-Path $root 'scripts\run_mugen_latent_motion_train_v1.py'),
+        '--profile', 'corpus50000',
+        '--manifest', $motionManifest,
+        '--output', $motion.Output
+    )
+    if ($null -ne $motion.Resume) {
+        $resumeSha256 = (Get-FileHash -LiteralPath $motion.Resume -Algorithm SHA256).Hash.ToLowerInvariant()
+        $arguments += @('--resume-checkpoint', $motion.Resume, '--expected-resume-sha256', $resumeSha256)
+    }
+    Invoke-LoggedProcess -Executable $python -Arguments $arguments `
+        -LogStem (Split-Path $motion.Output -Leaf)
+}
+if (-not (Test-Path -LiteralPath (Join-Path $motion.Output 'training-report.json'))) {
+    throw 'Motion DiT did not publish its final report'
+}
+
+$motionInferenceBase = Join-Path $inference `
+    'mugen-six-action-dense-latent-motion-scratch-v1-step50000-test'
+$motionInference = Resolve-ImmutableArtifactDirectory `
+    -Base $motionInferenceBase -CompletionFile 'evaluation-report.json'
+if (-not (Test-Path -LiteralPath (Join-Path $motionInference 'evaluation-report.json'))) {
+    Wait-GpuIdle
+    $motionCheckpoint = Join-Path $motion.Output 'checkpoint-ema.pt'
+    $motionCheckpointSha256 = (
+        Get-FileHash -LiteralPath $motionCheckpoint -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    Invoke-LoggedProcess -Executable $python `
+        -LogStem (Split-Path $motionInference -Leaf) -Arguments @(
+            (Join-Path $root 'scripts\evaluate_mugen_latent_motion_v1.py'),
+            '--checkpoint', $motionCheckpoint,
+            '--expected-sha256', $motionCheckpointSha256,
+            '--output-name', (Split-Path $motionInference -Leaf),
+            '--manifest', $motionManifest
+        )
+}
+Invoke-CheckpointCompaction -RunDirectory $motion.Output
+
+foreach ($processId in @($WaitForCaptionProcessId, $WaitForCoverageCaptionJoinId)) {
+    if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+        Wait-Process -Id $processId
+    }
+}
+foreach ($input in @(
+    $stillPlan,
+    $coverageCaptioned,
+    (Join-Path $clipModel 'source-index.json')
+)) {
+    if (-not (Test-Path -LiteralPath $input)) {
+        throw "Model-pipeline input is incomplete: $input"
     }
 }
 

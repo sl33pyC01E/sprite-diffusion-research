@@ -16,12 +16,12 @@ from spritelab.storage import DiskGuard  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("captioned_materialization", type=Path)
+    parser.add_argument("materialization", type=Path)
     parser.add_argument("latent_manifest", type=Path)
     parser.add_argument("output_directory", type=Path)
     args = parser.parse_args()
     plan_sha256, training_sha256 = export_mugen_dense_motion_artifacts(
-        args.captioned_materialization,
+        args.materialization,
         args.latent_manifest,
         args.output_directory,
         disk_guard=DiskGuard(ROOT, 100 * 1024**3),
