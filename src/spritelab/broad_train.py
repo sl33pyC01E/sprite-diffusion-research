@@ -327,7 +327,10 @@ def _require_manifest_usage(
         return
     if not isinstance(eligibility, dict):
         raise BroadTrainingContractError("materialization model_eligibility must be an object")
-    if eligibility.get(usage) is not True:
+    eligibility_key = (
+        "autoencoder_reconstruction" if usage == "autoencoder" else "conditional_generation"
+    )
+    if eligibility.get(eligibility_key) is not True:
         reason = eligibility.get("reason")
         raise BroadTrainingContractError(
             f"materialization is not eligible for {usage}: {reason or 'no reason recorded'}"

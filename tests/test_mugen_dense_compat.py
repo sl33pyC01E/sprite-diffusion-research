@@ -7,7 +7,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from spritelab.broad_train import BroadTrainingContractError, prepare_broad_corpus
+from spritelab.broad_train import (
+    BroadTrainingContractError,
+    _require_manifest_usage,
+    prepare_broad_corpus,
+)
 from spritelab.mugen_dense_compat import (
     export_mugen_dense_autoencoder_materialization,
     export_mugen_dense_captioned_materialization,
@@ -86,6 +90,7 @@ def test_dense_bridge_loads_through_verified_training_loader(tmp_path: Path) -> 
     assert clips[0].request.action == "idle"
     artifact = json.loads(output.read_text(encoding="utf-8"))
     assert artifact["model_eligibility"]["conditional_generation"] is False
+    _require_manifest_usage(output, "autoencoder")
     with pytest.raises(BroadTrainingContractError, match="not eligible for conditional_generation"):
         prepare_broad_corpus(output, target_size=128, target_frames=8)
 
