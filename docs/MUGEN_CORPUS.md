@@ -472,3 +472,25 @@ Rights and authorship remain evidence, not inference. Each archive URL, archive 
 member path, DEF author/name claim, AIR hash, SFF hash, action number, timing row, and
 derived pixel hash stays separately indexable. Unknown fan-asset rights are not
 converted into a permissive per-sprite claim.
+
+The final streamed-v2 audit publishes two non-destructive views. The `broad` view
+retains every unclipped character with a visible idle reference, including incomplete
+and unusually scaled variants. The `dense` view requires all six core slots, no empty
+output frame, a shared-view scale of at least 0.5, at least three genuinely animated
+slots, and at least four distinct action arrays. These are explicit training-quality
+thresholds, not deletion rules; excluded rows and exact reasons remain in the audit.
+Every NPY file byte hash, canonical array hash, shape, dtype, per-frame visible-pixel
+count, and nonempty-frame hash is reverified before either view is published.
+
+Dataset splits are transitive components, not independent rows. Exact full-SFF,
+complete action-array, and nonempty-frame hashes are grouped, and conservative DEF
+identity labels are normalized with Unicode NFKC, case folding, and alphanumeric token
+separation. Thus independently drawn variants with the same literal name (for example,
+`M. Bison` and `m bison`) cannot cross train/validation/test boundaries. This is
+stronger than exact-pixel deduplication but still does not claim franchise-aware alias
+resolution for differently worded names.
+
+The dense autoencoder bridge is zero-copy: it points the verified generic training
+loader at the two source materialization roots instead of duplicating clip tensors.
+Until literal Spark captions are joined, its DEF-label descriptions are explicitly
+`autoencoder_only`; conditional-generation trainers fail closed on that artifact.

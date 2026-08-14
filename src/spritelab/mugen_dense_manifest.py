@@ -170,6 +170,10 @@ def build_mugen_dense_manifest(
             }
         )
     records.sort(key=lambda row: row["variant_id"].encode("utf-8"))
+    evaluation_probes = {
+        split: _evaluation_probe(records, split=split, maximum_characters=32)
+        for split in ("train", "validation", "test")
+    }
     return {
         "artifact_kind": "mugen_dense_reference_motion_training_manifest",
         "components": component_rows,
@@ -190,6 +194,12 @@ def build_mugen_dense_manifest(
         "records": records,
         "schema_version": 1,
         "source_materializations": source_rows,
+        "evaluation_probes": evaluation_probes,
+        "evaluation_policy": {
+            "test": "identity-component-held-out generalization diagnostic",
+            "train": "exact-training-member in-distribution reconstruction and steering",
+            "validation": "identity-component-held-out model selection diagnostic",
+        },
         "split_policy": {
             "grouping": (
                 "transitive normalized DEF identity labels plus exact full-SFF, "
@@ -201,6 +211,30 @@ def build_mugen_dense_manifest(
             "validation": "stable component digest buckets 900-949 of 1000",
         },
     }
+
+
+def _evaluation_probe(
+    records: list[dict[str, Any]], *, split: str, maximum_characters: int
+) -> list[dict[str, Any]]:
+    candidates = [record for record in records if record["split"] == split]
+    ordered = sorted(
+        candidates,
+        key=lambda record: (
+            hashlib.sha256(f"mugen_dense_probe_v1\0{record['variant_id']}".encode()).digest(),
+            record["variant_id"].encode(),
+        ),
+    )[:maximum_characters]
+    return [
+        {
+            "actions": {
+                action["slot"]: action["record_id"]
+                for action in sorted(record["actions"], key=lambda row: row["slot"].encode())
+            },
+            "identity_id": record["identity_id"],
+            "variant_id": record["variant_id"],
+        }
+        for record in ordered
+    ]
 
 
 def export_mugen_dense_manifest(
