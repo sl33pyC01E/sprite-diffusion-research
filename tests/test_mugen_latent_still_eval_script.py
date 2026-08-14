@@ -7,7 +7,13 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from scripts.evaluate_mugen_latent_still_v1 import _array_sha256, _export_target_preview
+from scripts.evaluate_mugen_latent_still_v1 import (
+    _aggregate_metrics,
+    _array_sha256,
+    _export_target_preview,
+    _load_generated_frame,
+    _matched_metrics,
+)
 
 
 def _npy_bytes(value: np.ndarray) -> bytes:
@@ -68,3 +74,34 @@ def test_export_target_preview_rejects_tampered_source(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="file SHA-256"):
         _export_target_preview(record, output, index=0, plan_root=tmp_path)
+
+
+def test_generated_frame_and_matched_metrics_are_hash_bound(tmp_path) -> None:
+    target = np.zeros((128, 128, 4), dtype=np.uint8)
+    target[20:28, 30:38] = [30, 60, 90, 255]
+    prediction = target.copy()
+    prediction[20:24, 30:34, :3] = [60, 90, 120]
+    payload = _npy_bytes(prediction)
+    path = tmp_path / "sample.npy"
+    path.write_bytes(payload)
+    sample = {
+        "array": {
+            "array_content_sha256": _array_sha256(prediction),
+            "file_sha256": hashlib.sha256(payload).hexdigest(),
+            "path": path.name,
+        }
+    }
+
+    loaded = _load_generated_frame(sample, tmp_path)
+    metrics = _matched_metrics(loaded, target, alpha_threshold=127)
+    aggregate = _aggregate_metrics([metrics, metrics])
+
+    assert np.array_equal(loaded, prediction)
+    assert metrics["alpha_iou"] == 1
+    assert metrics["premultiplied_rgba_mae"] > 0
+    assert aggregate["count"] == 2
+    assert aggregate["mean"]["premultiplied_rgba_mae"] == metrics["premultiplied_rgba_mae"]
+
+    sample["array"]["file_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="file SHA-256"):
+        _load_generated_frame(sample, tmp_path)
