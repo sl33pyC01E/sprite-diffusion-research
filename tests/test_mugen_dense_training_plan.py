@@ -19,7 +19,11 @@ def _fixture(tmp_path: Path) -> Path:
         sequences.append(
             {
                 "action": action,
-                "caption": {"description": "a stocky fighter in green clothing"},
+                "caption": {
+                    "description": "a stocky fighter in green clothing",
+                    "reference_frame_array_content_sha256": "f" * 64,
+                    "reference_frame_index": 2,
+                },
                 "entity_class": "humanoid",
                 "identity_id": "identity-a",
                 "output": {
@@ -43,23 +47,22 @@ def _fixture(tmp_path: Path) -> Path:
     return path
 
 
-def test_dense_still_plan_covers_all_six_actions(tmp_path: Path) -> None:
+def test_dense_still_plan_uses_one_appearance_only_reference(tmp_path: Path) -> None:
     materialization = _fixture(tmp_path)
 
     plan = build_mugen_dense_still_training_plan(materialization)
 
-    assert plan["counts"]["sequences"] == 6
-    assert set(plan["counts"]["actions"]) == {
-        "idle",
-        "walk",
-        "jump",
-        "block",
-        "attack_a",
-        "attack_b",
-    }
-    attack = next(row for row in plan["records"] if row["conditioning"]["verb"] == "attack_a")
-    assert attack["prompt"].endswith("performing standard attack A; side view")
-    assert attack["target"]["eligible_frame_indices"] == list(range(8))
+    assert plan["counts"]["canonical_references"] == 1
+    assert plan["counts"]["source_action_sequences"] == 6
+    assert plan["schema_version"] == 4
+    reference = plan["records"][0]
+    assert reference["conditioning"]["verb"] == "canonical_reference"
+    assert reference["prompt"].endswith("neutral side-view reference")
+    assert "attack" not in reference["prompt"]
+    assert "walking" not in reference["prompt"]
+    assert reference["target"]["eligible_frame_indices"] == [2]
+    assert reference["target"]["reference_frame_array_content_sha256"] == "f" * 64
+    assert plan["sampler_contract"]["motion_or_action_text_in_prompt"] is False
 
 
 def test_dense_still_plan_export_is_no_clobber(tmp_path: Path) -> None:

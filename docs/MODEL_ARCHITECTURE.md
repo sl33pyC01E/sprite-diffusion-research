@@ -74,6 +74,11 @@ The active design separates appearance generation from motion:
    animation residuals; and
 3. the frozen sprite decoder reconstructs all ordered RGBA frames.
 
+The still target is exactly one idle temporal-medoid frame per identity. Action text
+and alternate action frames are deliberately absent from stage-one supervision; they
+belong to stage two. This prevents action frequency from overpowering appearance
+learning and makes the inference boundary match the requested interface.
+
 The selected quality-first custom codec uses continuous 64x64x8 latents for 128x128
 RGBA inputs, a 2x spatial reduction, nearest-neighbor decoder upsampling, and separate
 RGB/alpha reconstruction terms. It is accepted through a fixed, identity-disjoint

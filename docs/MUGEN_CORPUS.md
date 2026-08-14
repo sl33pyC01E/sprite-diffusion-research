@@ -502,6 +502,15 @@ caption superset only when every selected variant's identity, split, reference-f
 index, and exact reference-frame hash agree; unused broad captions are counted and
 cannot substitute for a missing dense caption.
 
+The stage-one still plan is appearance-only. It selects exactly one verified
+premultiplied-RGBA temporal-medoid frame from the idle clip of each identity and uses
+the literal visual caption plus a constant canonical full-body/transparent/side-view
+format prompt. It does not attach walk, jump, block, or attack text and does not treat
+the other seven logical idle frames as extra targets. Those frames remain useful to
+the codec and stage-two reference-motion model. This preserves the intended boundary:
+text describes who to draw; the separate motion DiT receives what that reference
+should do.
+
 The earlier MFFA and Anime All Stars schema-v2 materializations are now admitted
 through a strict zero-copy compatibility view rather than being abandoned or copied.
 The bridge verifies every character-to-clip join, selected record ID, shared world
