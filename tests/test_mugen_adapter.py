@@ -273,6 +273,26 @@ def test_sff_v2_recovery_quarantines_invalid_compressed_sprite() -> None:
     assert "run exceeds pixel count" in exclusions[0].detail
 
 
+def test_sff_v2_recovery_preserves_valid_sprites_around_corruption() -> None:
+    palette = bytearray(1024)
+    palette[4:8] = bytes((10, 20, 30, 255))
+    payload = _sff_v2_two_sprite_fixture(palette)
+    exclusions = []
+
+    with pytest.raises(ValueError, match="sprite 1.*run exceeds pixel count"):
+        decode_sff_v2(payload)
+
+    sprites, _ = decode_sff_v2(
+        payload,
+        recover_invalid_sprites=True,
+        exclusions=exclusions,
+    )
+
+    assert [sprite.archive_index for sprite in sprites] == [0]
+    assert sprites[0].rgba == bytes((10, 20, 30, 255)) * 4
+    assert exclusions[0].archive_index == 1
+
+
 def test_character_zip_audit_never_interprets_runtime_logic() -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -483,3 +503,55 @@ def _sff_v2_fixture(sprite_data: bytes, palette: bytearray, *, pixel_format: int
     )
     palette_header = struct.pack("<4H2I", 1, 1, 256, 0, 0, len(palette_bytes))
     return bytes(header) + sprite + palette_header + palette_bytes + sprite_data
+
+
+def _sff_v2_two_sprite_fixture(palette: bytearray) -> bytes:
+    first_sprite = 68
+    first_palette = first_sprite + 2 * 28
+    literal_offset = first_palette + 16
+    palette_bytes = bytes(palette)
+    valid = bytes((1, 1, 1, 1))
+    corrupt = struct.pack("<I", 4) + bytes((0x45, 1))
+    literal = palette_bytes + valid + corrupt
+    header = bytearray(68)
+    header[:12] = b"ElecbyteSpr\x00"
+    header[12:16] = bytes((0, 0, 0, 2))
+    struct.pack_into(
+        "<8I",
+        header,
+        36,
+        first_sprite,
+        2,
+        first_palette,
+        1,
+        literal_offset,
+        len(literal),
+        literal_offset + len(literal),
+        0,
+    )
+    sprites = b"".join(
+        (
+            struct.pack(
+                "<4H2hH2B2I2H",
+                0,
+                image,
+                2,
+                2,
+                0,
+                0,
+                0,
+                pixel_format,
+                8,
+                len(palette_bytes) + data_offset,
+                data_bytes,
+                0,
+                0,
+            )
+            for image, pixel_format, data_offset, data_bytes in (
+                (0, 0, 0, len(valid)),
+                (1, 2, len(valid), len(corrupt)),
+            )
+        )
+    )
+    palette_header = struct.pack("<4H2I", 1, 1, 256, 0, 0, len(palette_bytes))
+    return bytes(header) + sprites + palette_header + literal
