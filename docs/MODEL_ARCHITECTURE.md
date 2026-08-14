@@ -613,6 +613,19 @@ and identity-disjoint validation identities in separate fields; decoded RGBA sam
 and target comparisons remain a mandatory post-training evaluation rather than being
 inferred from either loss.
 
+The finalized broad-corpus codec reached step 20,000 with checkpoint SHA-256
+`6df0122a17214c3a8cd9edff7b057dc4572e125b0fa556de317b94cff1ac678e` and
+training-report SHA-256
+`ddc4c827e7ba1d7abef4726e6a98f378928692ea93206762fe6a1ec04a931767`.
+Its independent 512-frame held-out audit reports premultiplied-RGBA MAE
+`0.00110349`, visible-pixel RGB MAE `0.0145665`, alpha MAE `0.0000295531`, and
+alpha IoU@127 `0.99984175`. The audit report SHA-256 is
+`34736354897a45f72a48b173d5288a097d03fb278aaf62c12836c3d7ae44b79c`;
+its readable 16-pair target/reconstruction gallery SHA-256 is
+`df6866a4dd1ebce55a345cc761aa6a0a5c94391dd0374d2af5692e3f94088762`.
+These values establish the latent codec floor only. They are not text-to-sprite or
+reference-to-motion generation results.
+
 Earlier Stable Diffusion adapter experiments are historical evidence only. They are
 not an active control, are not part of the training sequence, and must not trigger
 model acquisition. The current still generator is the compact project-owned RGBA
