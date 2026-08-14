@@ -208,18 +208,36 @@ def _load_target_frame(
     file_sha256 = target.get("file_sha256")
     array_sha256 = target.get("array_content_sha256")
     eligible = target.get("eligible_frame_indices")
+    reference_index = target.get("reference_frame_index")
+    reference_sha256 = target.get("reference_frame_array_content_sha256")
     if (
         not isinstance(relative, str)
         or not relative
         or not isinstance(file_sha256, str)
         or not isinstance(array_sha256, str)
         or not isinstance(eligible, list)
-        or len(eligible) != 1
-        or isinstance(eligible[0], bool)
-        or not isinstance(eligible[0], int)
-        or not 0 <= eligible[0] < 8
+        or not eligible
+        or any(
+            isinstance(frame, bool) or not isinstance(frame, int) or not 0 <= frame < 8
+            for frame in eligible
+        )
+        or eligible != sorted(set(eligible))
     ):
         raise ValueError("still target evidence is invalid")
+    if reference_index is None and len(eligible) == 1:
+        reference_index = eligible[0]
+    if (
+        isinstance(reference_index, bool)
+        or not isinstance(reference_index, int)
+        or reference_index not in eligible
+    ):
+        raise ValueError("still target reference frame is invalid")
+    if reference_sha256 is not None and (
+        not isinstance(reference_sha256, str)
+        or len(reference_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in reference_sha256)
+    ):
+        raise ValueError("still target reference frame hash is invalid")
     source = (plan_root / relative).resolve()
     plan_root_resolved = plan_root.resolve()
     if plan_root_resolved != source and plan_root_resolved not in source.parents:
@@ -233,8 +251,10 @@ def _load_target_frame(
     value = np.ascontiguousarray(value)
     if _array_sha256(value) != array_sha256:
         raise ValueError("still target array SHA-256 differs")
-    frame_index = eligible[0]
+    frame_index = reference_index
     frame = np.ascontiguousarray(value[frame_index])
+    if reference_sha256 is not None and _array_sha256(frame) != reference_sha256:
+        raise ValueError("still target reference frame SHA-256 differs")
     return frame, {
         "frame_index": frame_index,
         "source_array_content_sha256": array_sha256,

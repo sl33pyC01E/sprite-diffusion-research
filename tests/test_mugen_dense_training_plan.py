@@ -62,6 +62,7 @@ def test_dense_still_plan_uses_all_idle_frames_for_one_appearance_clip(tmp_path:
     assert "attack" not in reference["prompt"]
     assert "walking" not in reference["prompt"]
     assert reference["target"]["eligible_frame_indices"] == list(range(8))
+    assert reference["target"]["reference_frame_index"] == 2
     assert reference["target"]["reference_frame_array_content_sha256"] == "f" * 64
     assert plan["sampler_contract"]["motion_or_action_text_in_prompt"] is False
     assert plan["sampler_contract"]["caption_reference"] == ("fixed_verified_idle_temporal_medoid")

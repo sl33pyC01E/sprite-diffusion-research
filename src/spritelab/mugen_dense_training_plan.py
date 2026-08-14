@@ -108,6 +108,7 @@ def build_mugen_dense_still_training_plan(
                     "frame_count": 8,
                     "frame_sampling": "uniform_verified_idle_clip_frame_training_v1",
                     "reference_frame_array_content_sha256": reference_sha256,
+                    "reference_frame_index": reference_index,
                     "relative_path": _text(target, "relative_path"),
                     "shape": target["shape"],
                 },

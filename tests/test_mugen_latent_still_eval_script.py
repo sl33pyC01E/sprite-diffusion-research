@@ -37,8 +37,10 @@ def test_export_target_preview_verifies_and_publishes_exact_frame(tmp_path) -> N
         "sequence_id": "sequence-1",
         "target": {
             "array_content_sha256": _array_sha256(array),
-            "eligible_frame_indices": [3],
+            "eligible_frame_indices": list(range(8)),
             "file_sha256": hashlib.sha256(payload).hexdigest(),
+            "reference_frame_array_content_sha256": _array_sha256(np.ascontiguousarray(array[3])),
+            "reference_frame_index": 3,
             "relative_path": "clips/sequence.npy",
         },
     }
