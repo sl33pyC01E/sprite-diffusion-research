@@ -26,24 +26,18 @@ foreach ($materialization in $materializations) {
         throw "Materialization is incomplete: $materialization"
     }
 }
-foreach ($output in @($quality, $dense, $bridge)) {
-    if (Test-Path -LiteralPath $output) {
-        throw "Refusing to replace coverage-tier artifact: $output"
+if (-not (Test-Path -LiteralPath $quality)) {
+    $auditArguments = @((Join-Path $root 'scripts\audit_mugen_stream_quality_v1.py'))
+    foreach ($materialization in $materializations) {
+        $auditArguments += @('--materialization', $materialization)
     }
+    $auditArguments += @(
+        '--minimum-view-scale', '0',
+        '--output', $quality
+    )
+    & $python @auditArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Coverage-tier quality audit failed' }
 }
-
-$auditArguments = @((Join-Path $root 'scripts\audit_mugen_stream_quality_v1.py'))
-foreach ($materialization in $materializations) {
-    $auditArguments += @('--materialization', $materialization)
-}
-$auditArguments += @(
-    '--minimum-view-scale',
-    '0',
-    '--output',
-    $quality
-)
-& $python @auditArguments
-if ($LASTEXITCODE -ne 0) { throw 'Coverage-tier quality audit failed' }
 
 $manifestArguments = @((Join-Path $root 'scripts\build_mugen_dense_manifest_v1.py'))
 foreach ($materialization in $materializations) {
@@ -57,9 +51,13 @@ $manifestArguments += @(
     '--tier',
     'dense'
 )
-& $python @manifestArguments
-if ($LASTEXITCODE -ne 0) { throw 'Coverage-tier dense manifest failed' }
+if (-not (Test-Path -LiteralPath $dense)) {
+    & $python @manifestArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Coverage-tier dense manifest failed' }
+}
 
-& $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
-    $dense $bridge
-if ($LASTEXITCODE -ne 0) { throw 'Coverage-tier autoencoder bridge failed' }
+if (-not (Test-Path -LiteralPath $bridge)) {
+    & $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
+        $dense $bridge
+    if ($LASTEXITCODE -ne 0) { throw 'Coverage-tier autoencoder bridge failed' }
+}

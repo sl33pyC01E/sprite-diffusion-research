@@ -27,39 +27,43 @@ foreach ($materialization in @($jus, $ascension, $mffa, $allStars)) {
         throw "Materialization is incomplete: $materialization"
     }
 }
-foreach ($output in @($quality, $broad, $dense, $broadBridge, $denseBridge, $captionInputs)) {
-    if (Test-Path -LiteralPath $output) {
-        throw "Refusing to replace corpus artifact: $output"
-    }
-}
-
-& $python (Join-Path $root 'scripts\audit_mugen_stream_quality_v1.py') `
-    --materialization $jus `
-    --materialization $ascension `
-    --materialization $mffa `
-    --materialization $allStars `
-    --output $quality
-if ($LASTEXITCODE -ne 0) { throw 'Full MUGEN quality audit failed' }
-
-foreach ($tier in @('broad', 'dense')) {
-    $manifest = if ($tier -eq 'broad') { $broad } else { $dense }
-    & $python (Join-Path $root 'scripts\build_mugen_dense_manifest_v1.py') `
+if (-not (Test-Path -LiteralPath $quality)) {
+    & $python (Join-Path $root 'scripts\audit_mugen_stream_quality_v1.py') `
         --materialization $jus `
         --materialization $ascension `
         --materialization $mffa `
         --materialization $allStars `
-        --quality-audit $quality `
-        --output $manifest `
-        --tier $tier
-    if ($LASTEXITCODE -ne 0) { throw "MUGEN $tier manifest failed" }
+        --output $quality
+    if ($LASTEXITCODE -ne 0) { throw 'Full MUGEN quality audit failed' }
 }
 
-& $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
-    $broad $broadBridge
-if ($LASTEXITCODE -ne 0) { throw 'Broad MUGEN autoencoder bridge failed' }
-& $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
-    $dense $denseBridge
-if ($LASTEXITCODE -ne 0) { throw 'Dense MUGEN autoencoder bridge failed' }
-& $python (Join-Path $root 'scripts\build_mugen_dense_caption_inputs_v1.py') `
-    $broad $captionInputs
-if ($LASTEXITCODE -ne 0) { throw 'Broad MUGEN caption inputs failed' }
+foreach ($tier in @('broad', 'dense')) {
+    $manifest = if ($tier -eq 'broad') { $broad } else { $dense }
+    if (-not (Test-Path -LiteralPath $manifest)) {
+        & $python (Join-Path $root 'scripts\build_mugen_dense_manifest_v1.py') `
+            --materialization $jus `
+            --materialization $ascension `
+            --materialization $mffa `
+            --materialization $allStars `
+            --quality-audit $quality `
+            --output $manifest `
+            --tier $tier
+        if ($LASTEXITCODE -ne 0) { throw "MUGEN $tier manifest failed" }
+    }
+}
+
+if (-not (Test-Path -LiteralPath $broadBridge)) {
+    & $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
+        $broad $broadBridge
+    if ($LASTEXITCODE -ne 0) { throw 'Broad MUGEN autoencoder bridge failed' }
+}
+if (-not (Test-Path -LiteralPath $denseBridge)) {
+    & $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
+        $dense $denseBridge
+    if ($LASTEXITCODE -ne 0) { throw 'Dense MUGEN autoencoder bridge failed' }
+}
+if (-not (Test-Path -LiteralPath $captionInputs)) {
+    & $python (Join-Path $root 'scripts\build_mugen_dense_caption_inputs_v1.py') `
+        $broad $captionInputs
+    if ($LASTEXITCODE -ne 0) { throw 'Broad MUGEN caption inputs failed' }
+}
