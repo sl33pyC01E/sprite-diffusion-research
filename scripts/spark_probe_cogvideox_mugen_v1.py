@@ -14,21 +14,22 @@ from diffusers import CogVideoXImageToVideoPipeline
 from PIL import Image
 
 MODEL = Path("/home/sleepy/sprite-lab-cogvideox/CogVideoX-5b-I2V-a6f0f4858a83")
-REFERENCE = Path(
-    "/home/sleepy/sprite-lab-cogvideox/reference-beige-fighter-run-frame4-gray127-128.png"
-)
-OUTPUT = Path("/home/sleepy/sprite-lab-cogvideox/probe-beige-fighter-normal-attack-v1")
+REFERENCE = Path("/home/sleepy/sprite-lab-cogvideox/reference-orange-fighter-idle-frame0-480.png")
+OUTPUT = Path("/home/sleepy/sprite-lab-cogvideox/probe-orange-fighter-normal-attack-v1")
 SOURCE_INDEX_SHA256 = None  # Filled only after the pinned download is hash-indexed.
-REFERENCE_SHA256 = "c7e84dd75385a87ee0cb46cfd772c29fbe381af754b0507e5677ae1fd4cb52eb"
-REFERENCE_IDENTITY_ID = "mugen_1578945736dcf507_854caa8e786a61c9"
+REFERENCE_SHA256 = "54634db9685c680e125b7b1b0a40b1657192db47ab6c2d6c2b7457142b18d0c9"
+REFERENCE_SOURCE_VIDEO_SHA256 = "993911108ecbc0b4423167c27894d538823e8c9db9db3a0a925cb3eafe0de1ad"
+REFERENCE_IDENTITY_ID = "mugen_13b410983214b11c_cd8d7683410b1695"
 REFERENCE_APPEARANCE = (
-    "muscular beige humanoid fighter, short yellow hair, side profile, black shorts"
+    "muscular orange-skinned humanoid fighter, short white hair, dark purple sleeveless "
+    "top, light yellow pants, dark shoes, purple wristbands, side profile"
 )
 SEED = 20260830
 PROMPT = (
-    "pixel art sprite, one isolated muscular beige humanoid fighter with short yellow hair "
-    "and black shorts, full body side view, performing a normal light attack, crisp hard "
-    "pixel edges, fixed camera, plain neutral background"
+    "pixel art sprite, one isolated muscular orange-skinned humanoid fighter with short "
+    "white hair, dark purple sleeveless top, light yellow pants, dark shoes, and purple "
+    "wristbands, full body side view, performing a normal light attack, crisp hard pixel "
+    "edges, fixed camera, plain neutral background"
 )
 NEGATIVE_PROMPT = (
     "photo, realistic, 3d render, blur, soft edges, camera movement, background scene, "
@@ -52,9 +53,9 @@ def main() -> None:
     if file_sha256(REFERENCE) != REFERENCE_SHA256:
         raise RuntimeError("MUGEN reference image differs")
     reference = Image.open(REFERENCE).convert("RGB")
-    if reference.size != (128, 128):
+    if reference.size != (480, 480):
         raise RuntimeError("MUGEN reference geometry differs")
-    conditioning = reference.resize((480, 480), Image.Resampling.NEAREST)
+    conditioning = reference
     pipe = CogVideoXImageToVideoPipeline.from_pretrained(
         MODEL,
         torch_dtype=torch.bfloat16,
@@ -141,10 +142,12 @@ def main() -> None:
             },
             "reference": {
                 "appearance_description": REFERENCE_APPEARANCE,
-                "conditioning_resize": "128_to_480_nearest_neighbor",
+                "conditioning_resize": "none_exact_480x480_rgb_frame",
                 "file_sha256": REFERENCE_SHA256,
                 "identity_id": REFERENCE_IDENTITY_ID,
                 "path": str(REFERENCE),
+                "source_video_file_sha256": REFERENCE_SOURCE_VIDEO_SHA256,
+                "source_video_frame_index": 0,
             },
             "schema_version": 1,
         }
