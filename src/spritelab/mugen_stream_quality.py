@@ -27,8 +27,8 @@ class MugenStreamQualityPolicy:
     minimum_distinct_slot_arrays: int = 4
 
     def __post_init__(self) -> None:
-        if not 0 < self.minimum_view_scale <= 4:
-            raise ValueError("minimum_view_scale must be in (0, 4]")
+        if not 0 <= self.minimum_view_scale <= 4:
+            raise ValueError("minimum_view_scale must be in [0, 4]")
         if not 0 <= self.minimum_dynamic_slots <= 6:
             raise ValueError("minimum_dynamic_slots must be between zero and six")
         if not 1 <= self.minimum_distinct_slot_arrays <= 6:

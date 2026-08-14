@@ -88,6 +88,17 @@ def test_quality_audit_retains_broad_character_with_explicit_dense_reason(
     ]
 
 
+def test_zero_scale_floor_admits_any_positive_fitted_scale(tmp_path: Path) -> None:
+    root = _fixture(tmp_path / "materialized", scale=0.0000001)
+
+    row = build_mugen_stream_quality_audit(
+        (root,), policy=MugenStreamQualityPolicy(minimum_view_scale=0)
+    )["quality_rows"][0]
+
+    assert row["dense_eligible"] is True
+    assert "view_scale_below_minimum" not in row["dense_exclusion_reasons"]
+
+
 def test_quality_audit_rejects_tampered_array(tmp_path: Path) -> None:
     root = _fixture(tmp_path / "materialized")
     value = np.load(root / "idle.npy", allow_pickle=False)

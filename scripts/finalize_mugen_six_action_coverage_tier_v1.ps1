@@ -38,7 +38,7 @@ foreach ($materialization in $materializations) {
 }
 $auditArguments += @(
     '--minimum-view-scale',
-    '0.000001',
+    '0',
     '--output',
     $quality
 )
