@@ -495,11 +495,21 @@ converted into a permissive per-sprite claim.
 The final streamed-v2 audit publishes two non-destructive views. The `broad` view
 retains every unclipped character with a visible idle reference, including incomplete
 and unusually scaled variants. The `dense` view requires all six core slots, no empty
-output frame, a shared-view scale of at least 0.5, at least three genuinely animated
+output frame, at least three genuinely animated
 slots, and at least four distinct action arrays. These are explicit training-quality
 thresholds, not deletion rules; excluded rows and exact reasons remain in the audit.
 Every NPY file byte hash, canonical array hash, shape, dtype, per-frame visible-pixel
 count, and nonempty-frame hash is reverified before either view is published.
+
+Scale is published as two explicit subtiers rather than used as a hidden architecture
+limit. The high-fidelity control requires a shared-view scale of at least `0.5`, so
+native art is reduced by no more than 2x. The main dense-coverage tier requires at
+least `0.25`, allowing up to 4x reduction while retaining the full fighter and zero
+visible-pixel clipping. Live audits of complete JUS and partial Ascension records show
+that the coverage threshold retains roughly 92--94% of complete fighters, versus
+70--82% for the high-fidelity threshold. The broad codec/appearance view retains even
+the remaining scale outliers; no source character is deleted. Results must be broken
+out by scale tier so added coverage cannot masquerade as high-fidelity evidence.
 
 Dataset splits are transitive components, not independent rows. Exact full-SFF,
 complete action-array, and nonempty-frame hashes are grouped, and conservative DEF
