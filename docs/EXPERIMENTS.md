@@ -665,3 +665,38 @@ The codec therefore preserves the required pixel structure; the quality failure
 belongs to the broad endpoint denoiser/training objective. The next broad run must
 use a genuine multi-timestep generative objective and multi-step solver, or a
 pretrained spatial/video prior. It must not repeat a longer one-step endpoint run.
+
+A hash-bound warm start then tested uniform rectified-flow training with 25% exact
+endpoint samples and 16-step Heun inference. It was stopped at step 2,000 because
+every validation gate deteriorated: PM-RGBA MAE rose monotonically from `0.071800`
+at step 1 to `0.079162`, `0.080364`, `0.082197`, and `0.083995` at steps 500,
+1,000, 1,500, and 2,000, while alpha IoU fell from `0.488696` to `0.428408`.
+The partial step-1,000 and step-2,000 checkpoints are retained with SHA-256 values
+`01299a7451f5eedf8d2a486f5eb5b7f3c7a478990f8edee0f25c6a85a44a13ee` and
+`fd997db96fed7d2d55874501bda3b722c2af4b2bd499f0c1bcc20db1cae3660d`.
+This rejects further training of the current small DiT under the tested flow
+contract; it does not reject latent video diffusion generally.
+
+## Pretrained sprite-prior video probes
+
+The first pretrained motion branch combines the pinned SD1.4 sprite-sheet prior,
+official AnimateDiff v3 motion adapter revision
+`2e8139b1d1269fd8a21deb96ad19455e187692eb`, and official RGB SparseCtrl revision
+`b8003d681d813c095e459b9141122894daff2d13`. The exact reference is one untouched
+test-identity MUGEN sprite composited on RGB 127 and enlarged by nearest neighbor.
+No MUGEN video fine-tuning is used in these probes.
+
+With only frame zero controlled, the first generated frame preserves a coherent
+single fighter but later frames collapse into full repeated sprite sheets. Its
+report SHA-256 is `e7062a2e149ab718abbf9e6f7e78fedd334b0ea46fbbd6a02e3d9a1110eed904`.
+Anchoring the identical reference at frames zero and seven, raising RGB control to
+2.0, and explicitly rejecting sheets preserves one subject topology, but the six
+intermediate frames become blurred generic interpolation and do not perform the
+requested attack. That report SHA-256 is
+`eaf43e69ba5e8968c36de99e7af6fd2f619cb6d00d0415101c02cf0b396f2bd4`.
+
+The pretrained spatial and motion priors clearly supply more coherent high-frequency
+structure than the small DiT, but prompting alone cannot map MUGEN action semantics
+into that motion prior. The next experiment must freeze the sprite renderer and
+fine-tune temporal motion capacity on the canonical MUGEN clips while presenting
+the exact reference control and action-conditioned text during training.
