@@ -115,7 +115,13 @@ def test_reconstruction_audit_is_hash_bound_no_clobber_and_stock_safe_load(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     corpus = _corpus()
-    monkeypatch.setattr(audit, "prepare_broad_corpus", lambda *args, **kwargs: corpus)
+    prepare_arguments = {}
+
+    def prepare(*args, **kwargs):
+        prepare_arguments.update(kwargs)
+        return corpus
+
+    monkeypatch.setattr(audit, "prepare_broad_corpus", prepare)
     checkpoint, checkpoint_sha256 = _checkpoint(tmp_path, corpus)
     output = tmp_path / "audit"
 
@@ -129,6 +135,7 @@ def test_reconstruction_audit_is_hash_bound_no_clobber_and_stock_safe_load(
     )
 
     report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert prepare_arguments["usage"] == "autoencoder"
     assert report["artifact_kind"] == ("sprite_rgba_autoencoder_held_out_reconstruction_audit")
     assert report["checkpoint"]["load_contract"] == (
         "torch.load(weights_only=True,map_location='cpu')"

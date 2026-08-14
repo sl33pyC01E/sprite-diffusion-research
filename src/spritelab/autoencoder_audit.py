@@ -132,6 +132,7 @@ def export_autoencoder_reconstruction_audit(
         materialization_manifest,
         target_size=architecture.image_size,
         target_frames=8,
+        usage="autoencoder",
     )
     expected_corpus = {
         "corpus_sha256": corpus.corpus_sha256,
