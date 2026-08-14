@@ -20,6 +20,10 @@ REFERENCE = Path(
 OUTPUT = Path("/home/sleepy/sprite-lab-cogvideox/probe-beige-fighter-normal-attack-v1")
 SOURCE_INDEX_SHA256 = None  # Filled only after the pinned download is hash-indexed.
 REFERENCE_SHA256 = "c7e84dd75385a87ee0cb46cfd772c29fbe381af754b0507e5677ae1fd4cb52eb"
+REFERENCE_IDENTITY_ID = "mugen_1578945736dcf507_854caa8e786a61c9"
+REFERENCE_APPEARANCE = (
+    "muscular beige humanoid fighter, short yellow hair, side profile, black shorts"
+)
 SEED = 20260830
 PROMPT = (
     "pixel art sprite, one isolated muscular beige humanoid fighter with short yellow hair "
@@ -136,8 +140,10 @@ def main() -> None:
                 "source_index_sha256": source_index_sha256,
             },
             "reference": {
+                "appearance_description": REFERENCE_APPEARANCE,
                 "conditioning_resize": "128_to_480_nearest_neighbor",
                 "file_sha256": REFERENCE_SHA256,
+                "identity_id": REFERENCE_IDENTITY_ID,
                 "path": str(REFERENCE),
             },
             "schema_version": 1,
