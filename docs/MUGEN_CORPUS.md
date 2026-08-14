@@ -476,6 +476,17 @@ unreferenced corrupt effect cannot discard an otherwise complete fighter. Header
 table, palette, and archive-member failures remain container-level failures; recovery
 never invents pixels, repairs compressed bytes, or substitutes runtime logic.
 
+The complete JUS/Chibi projection-v2 materialization is now published at
+`data/processed/mugen-iidx-jus-chibi-schema-core-b128-f8-v2/materialization.json`,
+SHA-256
+`b0266d06ff45ef5fe9199d20339a02eacde49262bd23cd792cec6cc6a338cce8`.
+It resolves 2,265 materialized characters and 13,092 core action clips. Exactly
+2,022 characters contain all six requested slots; per-slot coverage is idle 2,161,
+walk 2,196, jump 2,165, block 2,165, attack A 2,211, and attack B 2,194. Nineteen
+archive occurrences are exact character duplicates and 26 are explicit exclusions.
+The resumable first pass retained five failed variants; a sprite-local recovery retry
+subsequently materialized all five without regenerating already valid characters.
+
 Rights and authorship remain evidence, not inference. Each archive URL, archive hash,
 member path, DEF author/name claim, AIR hash, SFF hash, action number, timing row, and
 derived pixel hash stays separately indexable. Unknown fan-asset rights are not
