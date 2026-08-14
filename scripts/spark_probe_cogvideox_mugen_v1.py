@@ -15,7 +15,7 @@ from PIL import Image
 
 MODEL = Path("/home/sleepy/sprite-lab-cogvideox/CogVideoX-5b-I2V-a6f0f4858a83")
 REFERENCE = Path("/home/sleepy/sprite-lab-cogvideox/reference-orange-fighter-idle-frame0-480.png")
-OUTPUT = Path("/home/sleepy/sprite-lab-cogvideox/probe-orange-fighter-normal-attack-v2")
+OUTPUT = Path("/home/sleepy/sprite-lab-cogvideox/probe-orange-fighter-normal-attack-v3")
 SOURCE_INDEX_SHA256 = "98fbc592f23269a38d039d16f969844a9da073b56b24567772433d4b02e2f831"
 REFERENCE_SHA256 = "54634db9685c680e125b7b1b0a40b1657192db47ab6c2d6c2b7457142b18d0c9"
 REFERENCE_SOURCE_VIDEO_SHA256 = "993911108ecbc0b4423167c27894d538823e8c9db9db3a0a925cb3eafe0de1ad"
@@ -55,7 +55,8 @@ def main() -> None:
     reference = Image.open(REFERENCE).convert("RGB")
     if reference.size != (480, 480):
         raise RuntimeError("MUGEN reference geometry differs")
-    conditioning = reference
+    conditioning = Image.new("RGB", (720, 480), (127, 127, 127))
+    conditioning.paste(reference, (120, 0))
     pipe = CogVideoXImageToVideoPipeline.from_pretrained(
         MODEL,
         torch_dtype=torch.bfloat16,
@@ -71,26 +72,30 @@ def main() -> None:
             prompt=PROMPT,
             negative_prompt=NEGATIVE_PROMPT,
             height=480,
-            width=480,
+            width=720,
             num_frames=9,
             num_inference_steps=50,
             guidance_scale=6,
             use_dynamic_cfg=True,
             generator=generator,
         ).frames[0]
-    if len(frames) != 9 or any(frame.size != (480, 480) for frame in frames):
+    if len(frames) != 9 or any(frame.size != (720, 480) for frame in frames):
         raise RuntimeError("CogVideoX output geometry differs")
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{OUTPUT.name}.stage-", dir=OUTPUT.parent))
     try:
-        conditioning.save(stage / "reference-conditioning-480.png", optimize=False)
+        conditioning.save(stage / "reference-conditioning-720x480.png", optimize=False)
         display = []
         frame_records = []
         for index, frame in enumerate(frames):
-            raw_path = stage / f"frame-{index:02d}-raw-480.png"
+            raw_path = stage / f"frame-{index:02d}-raw-720x480.png"
             display_path = stage / f"frame-{index:02d}-display-128.png"
             frame.convert("RGB").save(raw_path, optimize=False)
-            reduced = frame.convert("RGB").resize((128, 128), Image.Resampling.BOX)
+            reduced = (
+                frame.convert("RGB")
+                .crop((120, 0, 600, 480))
+                .resize((128, 128), Image.Resampling.BOX)
+            )
             reduced.save(display_path, optimize=False)
             display.append(reduced)
             frame_records.append(
@@ -134,6 +139,7 @@ def main() -> None:
                 "sheet_file_sha256": file_sha256(sheet_path),
                 "sheet_path": sheet_path.name,
                 "use_dynamic_cfg": True,
+                "view_derivative": "center 480x480 crop then 128x128 BOX downsample",
             },
             "model": {
                 "model_id": source_index["model_id"],
@@ -142,7 +148,7 @@ def main() -> None:
             },
             "reference": {
                 "appearance_description": REFERENCE_APPEARANCE,
-                "conditioning_resize": "none_exact_480x480_rgb_frame",
+                "conditioning_resize": "none; exact 480x480 frame padded 120px left/right to 720x480",
                 "file_sha256": REFERENCE_SHA256,
                 "identity_id": REFERENCE_IDENTITY_ID,
                 "path": str(REFERENCE),

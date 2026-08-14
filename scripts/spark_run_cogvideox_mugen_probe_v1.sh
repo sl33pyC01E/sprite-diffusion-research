@@ -6,8 +6,8 @@ python="/home/sleepy/ComfyUI/comfyui-env-310/bin/python"
 diffusers="${root}/diffusers-2da7040be1a2"
 packages="${root}/python-packages"
 probe="${root}/spark_probe_cogvideox_mugen_v1.py"
-output="${root}/probe-orange-fighter-normal-attack-v2"
-log="${root}/probe-orange-fighter-normal-attack-v2.log"
+output="${root}/probe-orange-fighter-normal-attack-v3"
+log="${root}/probe-orange-fighter-normal-attack-v3.log"
 
 if [[ -e "${output}" || -e "${log}" ]]; then
   echo "refusing to replace CogVideoX probe output or log" >&2
