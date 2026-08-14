@@ -127,6 +127,27 @@ declared sizes on Spark, enforce a 100-GiB free-space floor there as well as on
 the workstation, and prioritize anime/JUS archives likely to add identities not
 already present in the 298-archive MFFA tranche.
 
+The bounded priority metadata pass is
+`data/index/reports/mugen-mikazuki-priority-download-metadata-v1.json`, SHA-256
+`4afcea23a2098ca5b03031c72b8a77fb2d86f0efaf58e7652e090eb499577ed1`.
+It visits only HTML landing/view responses, rejects non-HTML or responses over 2
+MiB, and never opens a direct archive body. Of 35 anime/JUS-priority link
+occurrences, 16 resolve to named single files with exact provider size metadata
+and 19 remain explicit folders, encrypted-provider entries, shorteners, dead
+links, or unsupported providers. The 16 known sizes total 699,842,805,738 bytes
+(651.78 GiB), which exceeds Spark's current free space and therefore rules out an
+undifferentiated bulk pull.
+
+The high-value size facts materially change acquisition order. Anime All Stars 3
+is 3.52 GiB; the 2,000-character JUS/Chibi archive is 38.93 GiB; Anime Ascension
+v3 is exactly 98,894,887,513 bytes (92.10 GiB); and the 1,100-character AX2 JUS
+screenpack file is only 121.94 MiB while its three character-set folder sizes are
+still unresolved. The intended Spark-only sequence is therefore smallest
+anime-specific archives first, followed by the 2,000-character JUS archive and
+then Anime Ascension only while the independent 100-GiB floor remains satisfied.
+Every acquired archive still requires exact hashing, inventory, decoder audit,
+and cross-corpus payload deduplication before it contributes training rows.
+
 ## First collection-scale pass
 
 The exact Simple MUGEN landing snapshot SHA-256 is
