@@ -41,7 +41,11 @@ def main(
     preflight_only: bool,
     manifest: Path = LEGACY_MANIFEST,
     output: Path | None = None,
+    resume_checkpoint: Path | None = None,
+    expected_resume_sha256: str | None = None,
 ) -> None:
+    if (resume_checkpoint is None) != (expected_resume_sha256 is None):
+        raise ValueError("resume checkpoint and expected SHA-256 must be provided together")
     if profile == "smoke":
         config = LatentMotionTrainingConfig(
             gradient_accumulation=1,
@@ -139,6 +143,11 @@ def main(
         "matched_train_identities": len(matched),
         "matched_train_rows": sum(len(verbs) for verbs in matched.values()),
         "output": str(output),
+        "resume": (
+            {"path": str(resume_checkpoint.resolve()), "sha256": expected_resume_sha256}
+            if resume_checkpoint is not None
+            else None
+        ),
         "warm_start": (
             {"path": str(ENDPOINT_EMA), "sha256": ENDPOINT_EMA_SHA256} if warm_start else None
         ),
@@ -150,6 +159,8 @@ def main(
         manifest,
         output,
         config=config,
+        resume_checkpoint_path=resume_checkpoint,
+        expected_resume_sha256=expected_resume_sha256,
         warm_start_checkpoint_path=ENDPOINT_EMA if warm_start else None,
         expected_warm_start_sha256=ENDPOINT_EMA_SHA256 if warm_start else None,
         disk_guard=DiskGuard(ROOT, min_free_bytes=100 * 1024**3),
@@ -183,6 +194,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--manifest", type=Path, default=LEGACY_MANIFEST)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--resume-checkpoint", type=Path)
+    parser.add_argument("--expected-resume-sha256")
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
     main(
@@ -190,4 +203,6 @@ if __name__ == "__main__":
         preflight_only=args.preflight_only,
         manifest=args.manifest,
         output=args.output,
+        resume_checkpoint=args.resume_checkpoint,
+        expected_resume_sha256=args.expected_resume_sha256,
     )
