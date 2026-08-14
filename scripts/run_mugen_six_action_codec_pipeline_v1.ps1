@@ -134,8 +134,7 @@ $latents = $latentsBase
 $trainStem = Split-Path $run -Leaf
 $auditStem = Split-Path $audit -Leaf
 $latentStem = Split-Path $latents -Leaf
-$trainOut = Join-Path $reports "$trainStem.out.log"
-$trainErr = Join-Path $reports "$trainStem.err.log"
+$trainLogs = Resolve-LogPair -BaseStem $trainStem
 $auditOut = Join-Path $reports "$auditStem.out.log"
 $auditErr = Join-Path $reports "$auditStem.err.log"
 
@@ -155,14 +154,9 @@ if ($null -ne $trainingLaunch.Resume) {
     )
 }
 if (-not $trainingLaunch.Complete) {
-    foreach ($log in @($trainOut, $trainErr)) {
-        if (Test-Path -LiteralPath $log) {
-            throw "Refusing to replace codec-training log: $log"
-        }
-    }
     $training = Start-Process -FilePath $python -ArgumentList $trainingArguments `
         -WorkingDirectory $root -WindowStyle Hidden -Wait -PassThru `
-        -RedirectStandardOutput $trainOut -RedirectStandardError $trainErr
+        -RedirectStandardOutput $trainLogs.Out -RedirectStandardError $trainLogs.Err
     if ($training.ExitCode -ne 0) {
         throw "Corpus codec training exited with code $($training.ExitCode)"
     }
