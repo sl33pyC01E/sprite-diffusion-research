@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from spritelab.sd_lora_train import sd_lora_target_modules
 from spritelab.storage import DiskGuard
 
 
@@ -106,7 +107,9 @@ def run_sd14_lora_inference(
         LoraConfig(
             r=int(training_config["rank"]),
             lora_alpha=int(training_config["alpha"]),
-            target_modules=["to_q", "to_k", "to_v", "to_out.0"],
+            target_modules=list(
+                sd_lora_target_modules(training_config.get("target_profile", "attention"))
+            ),
         ),
         adapter_name=adapter_name,
     )

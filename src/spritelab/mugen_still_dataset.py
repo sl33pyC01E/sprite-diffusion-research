@@ -126,6 +126,7 @@ def build_mugen_still_training_plan(
     materialization_path: Path | str,
     taxonomy_path: Path | str,
     caption_manifest_path: Path | str,
+    frame_eligibility_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Build a compact sequence plan with hierarchical sampling and exact targets."""
 
@@ -138,6 +139,39 @@ def build_mugen_still_training_plan(
     materialization = _json_object(materialization_bytes, "materialization")
     taxonomy = _json_object(taxonomy_bytes, "taxonomy")
     captions = _json_object(caption_bytes, "caption manifest")
+    eligibility_file = (
+        Path(frame_eligibility_path).resolve() if frame_eligibility_path is not None else None
+    )
+    eligibility_bytes = eligibility_file.read_bytes() if eligibility_file is not None else None
+    eligibility_by_sequence: dict[str, dict[str, Any]] | None = None
+    if eligibility_bytes is not None:
+        eligibility = _json_object(eligibility_bytes, "frame eligibility")
+        if eligibility.get("artifact_kind") != ("mugen_subject_bearing_still_frame_eligibility"):
+            raise ValueError("frame eligibility has the wrong artifact kind")
+        eligibility_records = eligibility.get("records")
+        eligibility_count = eligibility.get("counts", {}).get("sequences")
+        if (
+            not isinstance(eligibility_records, list)
+            or eligibility_count != len(eligibility_records)
+            or not all(isinstance(record, dict) for record in eligibility_records)
+        ):
+            raise ValueError("frame eligibility count does not match records")
+        eligibility_by_sequence = _unique_index(
+            eligibility_records, "sequence_id", "frame eligibility"
+        )
+        eligibility_source = eligibility.get("source")
+        if not isinstance(eligibility_source, dict):
+            raise ValueError("frame eligibility source is missing")
+        if (
+            eligibility_source.get("materialization_file_sha256")
+            != hashlib.sha256(materialization_bytes).hexdigest()
+        ):
+            raise ValueError("frame eligibility materialization differs")
+        if (
+            eligibility_source.get("caption_manifest_file_sha256")
+            != hashlib.sha256(caption_bytes).hexdigest()
+        ):
+            raise ValueError("frame eligibility captions differ")
     sequences = _records(materialization, "sequences", "sequence_count", "materialization")
     taxonomy_records = _records(taxonomy, "records", "sequence_count", "taxonomy")
     caption_records = _records(captions, "records", "caption_count", "caption manifest")
@@ -158,6 +192,8 @@ def build_mugen_still_training_plan(
     split_counts: Counter[str] = Counter()
     identity_splits: dict[str, str] = {}
     prompts: set[str] = set()
+    eligible_frame_count = 0
+    excluded_sequence_count = 0
     for sequence in sorted(sequences, key=lambda row: str(row.get("sequence_id")).encode()):
         sequence_id = _required_text(sequence, "sequence_id")
         identity_id = _required_text(sequence, "identity_id")
@@ -176,6 +212,30 @@ def build_mugen_still_training_plan(
         ):
             raise ValueError(f"taxonomy identity/split mismatch for {sequence_id}")
         verb = _required_text(taxonomy_record, "verb")
+        eligible_frame_indices = list(range(8))
+        if eligibility_by_sequence is not None:
+            eligibility_record = eligibility_by_sequence.get(sequence_id)
+            if eligibility_record is None:
+                raise ValueError(f"frame eligibility is missing sequence {sequence_id}")
+            if (
+                eligibility_record.get("identity_id") != identity_id
+                or eligibility_record.get("split") != split
+            ):
+                raise ValueError(f"frame eligibility identity/split differs for {sequence_id}")
+            raw_indices = eligibility_record.get("eligible_frame_indices")
+            if (
+                not isinstance(raw_indices, list)
+                or any(
+                    isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < 8
+                    for index in raw_indices
+                )
+                or raw_indices != sorted(set(raw_indices))
+            ):
+                raise ValueError(f"eligible frame indices are invalid for {sequence_id}")
+            eligible_frame_indices = raw_indices
+            if not eligible_frame_indices:
+                excluded_sequence_count += 1
+                continue
         caption = caption_by_identity[identity_id]
         if caption.get("split") != split or caption.get("entity_class") != entity_class:
             raise ValueError(f"caption split/entity mismatch for {identity_id}")
@@ -211,12 +271,14 @@ def build_mugen_still_training_plan(
             raise ValueError(
                 f"sequence target geometry is unsupported for {sequence_id}: {shape!r}"
             )
-        sample_id = (
-            "still_sequence_"
-            + hashlib.sha256(
-                f"mugen_still_sequence_v1\0{sequence_id}\0{caption_manifest_sha256}".encode()
-            ).hexdigest()[:32]
-        )
+        if eligibility_bytes is None:
+            sample_payload = f"mugen_still_sequence_v1\0{sequence_id}\0{caption_manifest_sha256}"
+        else:
+            sample_payload = (
+                f"mugen_subject_bearing_still_sequence_v2\0{sequence_id}\0"
+                f"{caption_manifest_sha256}\0{hashlib.sha256(eligibility_bytes).hexdigest()}"
+            )
+        sample_id = "still_sequence_" + hashlib.sha256(sample_payload.encode()).hexdigest()[:32]
         output_records.append(
             {
                 "caption_reference": {
@@ -244,37 +306,67 @@ def build_mugen_still_training_plan(
                     "array_content_sha256": target["array_content_sha256"],
                     "file_sha256": target["file_sha256"],
                     "frame_count": 8,
-                    "frame_sampling": "uniform_unique_logical_frame_index",
+                    "frame_sampling": (
+                        "uniform_subject_bearing_logical_frame_index"
+                        if eligibility_bytes is not None
+                        else "uniform_unique_logical_frame_index"
+                    ),
                     "relative_path": relative_path,
                     "shape": shape,
+                    **(
+                        {"eligible_frame_indices": eligible_frame_indices}
+                        if eligibility_bytes is not None
+                        else {}
+                    ),
                 },
             }
         )
         action_counts[verb] += 1
         split_counts[split] += 1
-    if len(output_records) != len(taxonomy_by_sequence):
+        eligible_frame_count += len(eligible_frame_indices)
+    if eligibility_by_sequence is None and len(output_records) != len(taxonomy_by_sequence):
         raise ValueError("taxonomy contains sequence rows absent from materialization")
+    if eligibility_by_sequence is not None and set(eligibility_by_sequence) != set(
+        taxonomy_by_sequence
+    ):
+        raise ValueError("frame eligibility sequence closure differs from taxonomy")
+    retained_identities = {record["identity_id"] for record in output_records}
     return {
         "artifact_kind": "mugen_latent_still_sequence_training_plan",
         "counts": {
             "action_sequences": dict(
                 sorted(action_counts.items(), key=lambda item: item[0].encode())
             ),
-            "identities": len(identity_splits),
+            "identities": (
+                len(retained_identities) if eligibility_bytes is not None else len(identity_splits)
+            ),
             "prompts": len(prompts),
             "sequences": len(output_records),
             "split_sequences": dict(
                 sorted(split_counts.items(), key=lambda item: item[0].encode())
             ),
+            **(
+                {
+                    "eligible_frames": eligible_frame_count,
+                    "excluded_identities": len(identity_splits) - len(retained_identities),
+                    "excluded_sequences": excluded_sequence_count,
+                }
+                if eligibility_bytes is not None
+                else {}
+            ),
         },
         "records": output_records,
         "sampler_contract": {
-            "frame": "uniform_logical_frame_within_selected_sequence",
+            "frame": (
+                "uniform_subject_bearing_frame_within_selected_sequence"
+                if eligibility_bytes is not None
+                else "uniform_logical_frame_within_selected_sequence"
+            ),
             "hierarchy": ["identity", "verb", "sequence", "frame"],
             "identity_split_disjoint": True,
             "raw_sequence_frequency_is_not_sampling_weight": True,
         },
-        "schema_version": 1,
+        "schema_version": 2 if eligibility_bytes is not None else 1,
         "source": {
             "caption_manifest_file_sha256": caption_manifest_sha256,
             "caption_manifest_path": str(caption_file),
@@ -282,6 +374,14 @@ def build_mugen_still_training_plan(
             "materialization_path": str(materialization_file),
             "taxonomy_file_sha256": hashlib.sha256(taxonomy_bytes).hexdigest(),
             "taxonomy_path": str(taxonomy_file),
+            **(
+                {
+                    "frame_eligibility_file_sha256": hashlib.sha256(eligibility_bytes).hexdigest(),
+                    "frame_eligibility_path": str(eligibility_file),
+                }
+                if eligibility_bytes is not None
+                else {}
+            ),
         },
     }
 
@@ -292,6 +392,7 @@ def export_mugen_still_training_plan(
     caption_manifest_path: Path | str,
     output_path: Path | str,
     *,
+    frame_eligibility_path: Path | str | None = None,
     disk_guard: DiskGuard | None = None,
 ) -> tuple[Path, str]:
     """Write one canonical no-clobber still-training plan."""
@@ -303,6 +404,7 @@ def export_mugen_still_training_plan(
         materialization_path,
         taxonomy_path,
         caption_manifest_path,
+        frame_eligibility_path,
     )
     payload = canonical_json_bytes(plan)
     (disk_guard or DiskGuard(output.parent, min_free_bytes=100 * 1024**3)).require_capacity(

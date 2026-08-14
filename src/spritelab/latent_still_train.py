@@ -108,6 +108,7 @@ class LatentStillRow:
     latent_path: Path
     latent_file_sha256: str
     latent_array_sha256: str
+    eligible_frame_indices: tuple[int, ...] = tuple(range(8))
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +155,7 @@ def sample_hierarchical_batch(
     *,
     batch_size: int,
     generator: Any,
+    frame_indices_by_row: tuple[tuple[int, ...], ...] | None = None,
 ) -> tuple[tuple[int, int], ...]:
     """Sample identities and their verbs uniformly, then sequence and frame."""
 
@@ -170,7 +172,10 @@ def sample_hierarchical_batch(
         verb = verbs[int(runtime.randint(len(verbs), (1,), generator=generator))]
         candidates = index[identity][verb]
         row = candidates[int(runtime.randint(len(candidates), (1,), generator=generator))]
-        frame = int(runtime.randint(8, (1,), generator=generator))
+        eligible = tuple(range(8)) if frame_indices_by_row is None else frame_indices_by_row[row]
+        if not eligible:
+            raise ValueError(f"sampler row {row} has no eligible frames")
+        frame = eligible[int(runtime.randint(len(eligible), (1,), generator=generator))]
         output.append((row, frame))
     return tuple(output)
 
@@ -239,8 +244,9 @@ def load_latent_still_corpus(
         raise LatentStillTrainingError("plan and latent cache materializations differ")
     latent_by_id = _unique(latent_records, "sequence_id", "latent manifest")
     prompt_by_text = _unique(text_rows, "prompt", "text manifest")
-    if {row.get("sequence_id") for row in plan_records} != set(latent_by_id):
-        raise LatentStillTrainingError("plan and latent sequence closure differs")
+    plan_sequence_ids = {row.get("sequence_id") for row in plan_records}
+    if not plan_sequence_ids.issubset(latent_by_id):
+        raise LatentStillTrainingError("latent cache lacks plan sequences")
 
     text_root = text_file.parent
     arrays = text.get("arrays")
@@ -262,9 +268,36 @@ def load_latent_still_corpus(
         if not isinstance(conditioning, dict):
             raise LatentStillTrainingError(f"conditioning is missing for {sequence_id}")
         verb = _required_text(conditioning, "verb")
+        target = plan_record.get("target")
+        if target is None:
+            raw_eligible = list(range(8))
+        elif not isinstance(target, dict):
+            raise LatentStillTrainingError(f"target is missing for {sequence_id}")
+        else:
+            raw_eligible = target.get("eligible_frame_indices", list(range(8)))
+        if (
+            not isinstance(raw_eligible, list)
+            or not raw_eligible
+            or any(
+                isinstance(frame, bool) or not isinstance(frame, int) or not 0 <= frame < 8
+                for frame in raw_eligible
+            )
+            or raw_eligible != sorted(set(raw_eligible))
+        ):
+            raise LatentStillTrainingError(f"eligible frames are invalid for {sequence_id}")
         latent_record = latent_by_id[sequence_id]
         if latent_record.get("identity_id") != identity_id or latent_record.get("split") != split:
             raise LatentStillTrainingError(f"latent identity/split differs for {sequence_id}")
+        target = plan_record.get("target")
+        latent_source_record = latent_record.get("source")
+        if isinstance(target, dict):
+            if not isinstance(latent_source_record, dict):
+                raise LatentStillTrainingError(f"latent source is absent for {sequence_id}")
+            for key in ("array_content_sha256", "file_sha256", "relative_path"):
+                if latent_source_record.get(key) != target.get(key):
+                    raise LatentStillTrainingError(
+                        f"latent source target differs for {sequence_id} at {key}"
+                    )
         text_row = prompt_by_text.get(prompt)
         if text_row is None:
             raise LatentStillTrainingError(f"text cache lacks prompt for {sequence_id}")
@@ -285,6 +318,7 @@ def load_latent_still_corpus(
             latent_path=path,
             latent_file_sha256=_required_text(latent_record, "file_sha256"),
             latent_array_sha256=_required_text(latent_record, "array_content_sha256"),
+            eligible_frame_indices=tuple(raw_eligible),
         )
         if verify_latent_files:
             _load_latent(row, verify_hashes=True)
@@ -432,6 +466,7 @@ def _train(
             "parent_step": start_step,
         }
     sampler_index = build_hierarchical_sampler_index(corpus.rows, corpus.train_indices)
+    eligible_frames = tuple(row.eligible_frame_indices for row in corpus.rows)
     validation_selection = _validation_selection(corpus, config.validation_rows)
     dtype = runtime.bfloat16 if config.precision == "bfloat16" else runtime.float32
     autocast = config.precision == "bfloat16"
@@ -450,6 +485,7 @@ def _train(
                 sampler_index,
                 batch_size=config.batch_size,
                 generator=sampler_generator,
+                frame_indices_by_row=eligible_frames,
             )
             clean, context, mask = _training_batch(runtime, corpus, selection, device=device)
             noise = runtime.randn(
@@ -621,7 +657,7 @@ def _validation_selection(
     for index in corpus.validation_indices:
         by_identity.setdefault(corpus.rows[index].identity_id, index)
     selected = [by_identity[key] for key in sorted(by_identity, key=str.encode)[:maximum_rows]]
-    return tuple((index, 0) for index in selected)
+    return tuple((index, corpus.rows[index].eligible_frame_indices[0]) for index in selected)
 
 
 def _validate(

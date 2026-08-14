@@ -22,6 +22,7 @@ from spritelab.latent_still_train import (
 from spritelab.storage import DiskGuard
 
 Precision = Literal["float32", "bfloat16"]
+LoraTargetProfile = Literal["attention", "attention_resnet"]
 
 
 class SDLoraTrainingError(ValueError):
@@ -50,6 +51,7 @@ class SDLoraTrainingConfig:
     seed: int = 20260819
     device: str = "cuda"
     precision: Precision = "bfloat16"
+    target_profile: LoraTargetProfile = "attention"
 
     def __post_init__(self) -> None:
         for name in (
@@ -87,6 +89,19 @@ class SDLoraTrainingConfig:
             raise ValueError("conditioning_dropout_probability must be in [0,1]")
         if self.precision not in {"float32", "bfloat16"}:
             raise ValueError("precision must be float32 or bfloat16")
+        if self.target_profile not in {"attention", "attention_resnet"}:
+            raise ValueError("target_profile must be attention or attention_resnet")
+
+
+def sd_lora_target_modules(profile: LoraTargetProfile | str) -> tuple[str, ...]:
+    """Return the exact PEFT module suffixes for a quality-control profile."""
+
+    attention = ("to_q", "to_k", "to_v", "to_out.0")
+    if profile == "attention":
+        return attention
+    if profile == "attention_resnet":
+        return (*attention, "proj_in", "proj_out", "conv1", "conv2", "conv_shortcut")
+    raise ValueError("unknown SD LoRA target profile")
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,12 +140,9 @@ def load_sd_lora_corpus(
     text = _json_object(text_bytes, "text manifest")
     if latent.get("artifact_kind") != "mugen_sd14_noncanonical_rgb_vae_latent_cache":
         raise SDLoraTrainingError("RGB latent cache has the wrong artifact kind")
-    if latent.get("source", {}).get("plan_file_sha256") != hashlib.sha256(plan_bytes).hexdigest():
-        raise SDLoraTrainingError("RGB latent cache was not built from this plan")
-    if (
-        text.get("source", {}).get("training_plan_file_sha256")
-        != hashlib.sha256(plan_bytes).hexdigest()
-    ):
+    plan_sha256 = hashlib.sha256(plan_bytes).hexdigest()
+    cache_plan_exact = latent.get("source", {}).get("plan_file_sha256") == plan_sha256
+    if text.get("source", {}).get("training_plan_file_sha256") != plan_sha256:
         raise SDLoraTrainingError("text cache was not built from this plan")
     plan_records = _counted_records(
         plan.get("records"), plan.get("counts", {}).get("sequences"), "training plan"
@@ -141,8 +153,9 @@ def load_sd_lora_corpus(
     text_rows = _counted_records(text.get("rows"), text.get("prompt_count"), "text manifest")
     latent_by_id = _unique(latent_records, "sequence_id", "RGB latent manifest")
     prompt_rows = _unique(text_rows, "prompt", "text manifest")
-    if {record.get("sequence_id") for record in plan_records} != set(latent_by_id):
-        raise SDLoraTrainingError("plan and RGB latent sequence closure differs")
+    plan_sequence_ids = {record.get("sequence_id") for record in plan_records}
+    if not plan_sequence_ids.issubset(latent_by_id):
+        raise SDLoraTrainingError("RGB latent cache lacks plan sequences")
     arrays = text.get("arrays")
     if not isinstance(arrays, dict):
         raise SDLoraTrainingError("text array records are missing")
@@ -169,6 +182,24 @@ def load_sd_lora_corpus(
         latent_record = latent_by_id[sequence_id]
         if latent_record.get("identity_id") != identity_id or latent_record.get("split") != split:
             raise SDLoraTrainingError(f"RGB latent identity/split differs for {sequence_id}")
+        target = plan_record.get("target")
+        source_target = latent_record.get("source_target")
+        if not isinstance(target, dict) or not isinstance(source_target, dict):
+            raise SDLoraTrainingError(f"RGB source target is absent for {sequence_id}")
+        for key in ("array_content_sha256", "file_sha256", "relative_path"):
+            if source_target.get(key) != target.get(key):
+                raise SDLoraTrainingError(f"RGB source target differs for {sequence_id} at {key}")
+        raw_eligible = target.get("eligible_frame_indices", list(range(8)))
+        if (
+            not isinstance(raw_eligible, list)
+            or not raw_eligible
+            or any(
+                isinstance(frame, bool) or not isinstance(frame, int) or not 0 <= frame < 8
+                for frame in raw_eligible
+            )
+            or raw_eligible != sorted(set(raw_eligible))
+        ):
+            raise SDLoraTrainingError(f"eligible frames are invalid for {sequence_id}")
         text_record = prompt_rows.get(prompt)
         if text_record is None or not isinstance(text_record.get("row_index"), int):
             raise SDLoraTrainingError(f"text cache lacks prompt for {sequence_id}")
@@ -184,6 +215,7 @@ def load_sd_lora_corpus(
             latent_path=path,
             latent_file_sha256=_text(latent_record, "file_sha256"),
             latent_array_sha256=_text(latent_record, "array_content_sha256"),
+            eligible_frame_indices=tuple(raw_eligible),
         )
         _load_rgb_latent(row, verify=True)
         rows.append(row)
@@ -196,8 +228,11 @@ def load_sd_lora_corpus(
     ):
         raise SDLoraTrainingError("training and validation identities overlap")
     contract = {
-        "plan_file_sha256": hashlib.sha256(plan_bytes).hexdigest(),
+        "plan_file_sha256": plan_sha256,
         "record_count": len(rows),
+        "rgb_cache_binding": (
+            "exact_plan" if cache_plan_exact else "hash_verified_source_target_subset"
+        ),
         "rgb_latent_manifest_file_sha256": hashlib.sha256(latent_bytes).hexdigest(),
         "text_manifest_file_sha256": hashlib.sha256(text_bytes).hexdigest(),
         "train_identities": len({rows[index].identity_id for index in train}),
@@ -227,6 +262,7 @@ def run_sd14_lora_training(
     config: SDLoraTrainingConfig | None = None,
     resume_checkpoint_path: Path | str | None = None,
     expected_resume_sha256: str | None = None,
+    stop_after_step: int | None = None,
     disk_guard: DiskGuard | None = None,
 ) -> SDLoraTrainingResult:
     """Fine-tune only SD1.4 attention LoRA weights on the matched RGB control."""
@@ -245,6 +281,12 @@ def run_sd14_lora_training(
         raise FileExistsError(f"Refusing to replace SD LoRA output: {output}")
     if (resume_checkpoint_path is None) != (expected_resume_sha256 is None):
         raise ValueError("resume checkpoint and expected SHA-256 must be supplied together")
+    if stop_after_step is not None and (
+        isinstance(stop_after_step, bool)
+        or not isinstance(stop_after_step, int)
+        or not 0 < stop_after_step <= experiment.steps
+    ):
+        raise ValueError("stop_after_step must be in (0, config.steps]")
     device = torch.device(experiment.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
@@ -268,11 +310,12 @@ def run_sd14_lora_training(
     unet.requires_grad_(False)
     unet.enable_gradient_checkpointing()
     adapter_name = "mugen"
+    target_modules = sd_lora_target_modules(experiment.target_profile)
     lora_config = LoraConfig(
         r=experiment.rank,
         lora_alpha=experiment.alpha,
         init_lora_weights="gaussian",
-        target_modules=["to_q", "to_k", "to_v", "to_out.0"],
+        target_modules=list(target_modules),
     )
     unet.add_adapter(lora_config, adapter_name=adapter_name)
     trainable = [parameter for parameter in unet.parameters() if parameter.requires_grad]
@@ -320,14 +363,18 @@ def run_sd14_lora_training(
             "parent_checkpoint_sha256": expected_resume_sha256,
             "parent_step": start_step,
         }
+    final_step = experiment.steps if stop_after_step is None else stop_after_step
+    if final_step <= start_step:
+        raise SDLoraTrainingError("stop_after_step must exceed the resume step")
     index = build_hierarchical_sampler_index(corpus.rows, corpus.train_indices)
+    eligible_frames = tuple(row.eligible_frame_indices for row in corpus.rows)
     validation = _validation_selection(corpus, experiment.validation_rows)
     dtype = torch.bfloat16 if experiment.precision == "bfloat16" else torch.float32
     autocast = experiment.precision == "bfloat16"
     history_path = output / "training-history.jsonl"
     unet.train()
     with history_path.open("x", encoding="utf-8", newline="\n") as history:
-        for step_index in range(start_step, experiment.steps):
+        for step_index in range(start_step, final_step):
             step = step_index + 1
             learning_rate = _learning_rate(step, experiment)
             for group in optimizer.param_groups:
@@ -340,6 +387,7 @@ def run_sd14_lora_training(
                     index,
                     batch_size=experiment.batch_size,
                     generator=sampler_generator,
+                    frame_indices_by_row=eligible_frames,
                 )
                 clean, context = _batch(torch, corpus, selection, device=device)
                 noise = torch.randn(
@@ -381,7 +429,7 @@ def run_sd14_lora_training(
                 for key, value in current_state.items():
                     ema[key].lerp_(value.detach(), 1 - 0.999)
             validation_loss = None
-            if step == 1 or step % experiment.validate_every == 0 or step == experiment.steps:
+            if step == 1 or step % experiment.validate_every == 0 or step == final_step:
                 validation_loss = _validate(
                     torch,
                     corpus,
@@ -393,7 +441,7 @@ def run_sd14_lora_training(
                     autocast=autocast,
                     seed=experiment.seed + 20_000,
                 )
-            if step == 1 or step % experiment.log_every == 0 or step == experiment.steps:
+            if step == 1 or step % experiment.log_every == 0 or step == final_step:
                 history.write(
                     json.dumps(
                         {
@@ -412,7 +460,7 @@ def run_sd14_lora_training(
                 )
                 history.flush()
                 os.fsync(history.fileno())
-            if step % experiment.checkpoint_every == 0 or step == experiment.steps:
+            if step % experiment.checkpoint_every == 0 or step == final_step:
                 _write_checkpoint(
                     torch,
                     output / f"training-step-{step:07d}.pt",
@@ -429,7 +477,7 @@ def run_sd14_lora_training(
                     device=device,
                     disk_guard=guard,
                 )
-    final_checkpoint = output / f"training-step-{experiment.steps:07d}.pt"
+    final_checkpoint = output / f"training-step-{final_step:07d}.pt"
     report = {
         "artifact_kind": "mugen_sd14_attention_lora_rgb_quality_control",
         "claim": "pretrained RGB control only; not canonical RGBA output",
@@ -439,7 +487,7 @@ def run_sd14_lora_training(
         "lineage": lineage,
         "lora": {
             "adapter_name": adapter_name,
-            "target_modules": ["to_q", "to_k", "to_v", "to_out.0"],
+            "target_modules": list(target_modules),
             "trainable_parameters": sum(parameter.numel() for parameter in trainable),
         },
         "runtime": {
@@ -449,7 +497,12 @@ def run_sd14_lora_training(
             "torch": str(torch.__version__),
         },
         "source_index_file_sha256": expected_source_index_sha256,
-        "step": experiment.steps,
+        "step": final_step,
+        "training_extent": {
+            "is_partial_cumulative_run": final_step < experiment.steps,
+            "planned_cumulative_steps": experiment.steps,
+            "published_cumulative_step": final_step,
+        },
         "training_checkpoint": {
             "file_sha256": _file_sha256(final_checkpoint),
             "path": final_checkpoint.name,
@@ -491,7 +544,10 @@ def _validation_selection(corpus: SDLoraCorpus, maximum_rows: int) -> tuple[tupl
     for index in corpus.validation_indices:
         by_identity.setdefault(corpus.rows[index].identity_id, index)
     return tuple(
-        (by_identity[identity], 0)
+        (
+            by_identity[identity],
+            corpus.rows[by_identity[identity]].eligible_frame_indices[0],
+        )
         for identity in sorted(by_identity, key=str.encode)[:maximum_rows]
     )
 

@@ -87,7 +87,20 @@ def build_sd_lora_target_comparison(
         generated_path = (inference_file.parent / _text(generated_record, "path")).resolve()
         if _file_sha256(generated_path) != generated_record.get("file_sha256"):
             raise StillComparisonError("generated PNG hash differs")
-        target_rgb = composite_rgba_on_background(rgba[0:1])[0]
+        eligible = target.get("eligible_frame_indices", [0])
+        if (
+            not isinstance(eligible, list)
+            or not eligible
+            or any(
+                isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < 8
+                for index in eligible
+            )
+        ):
+            raise StillComparisonError("eligible target frame indices are invalid")
+        target_frame_index = eligible[0]
+        target_rgb = composite_rgba_on_background(
+            rgba[target_frame_index : target_frame_index + 1]
+        )[0]
         target_uint8 = np.rint(target_rgb * 255).clip(0, 255).astype(np.uint8)
         generated = np.asarray(Image.open(generated_path).convert("RGB"), dtype=np.uint8)
         rows.append(
@@ -99,6 +112,7 @@ def build_sd_lora_target_comparison(
                 "sequence_id": target_record.get("sequence_id"),
                 "target": target_uint8,
                 "target_array_content_sha256": target.get("array_content_sha256"),
+                "target_frame_index": target_frame_index,
             }
         )
     guard = disk_guard or DiskGuard(output.parent, min_free_bytes=100 * 1024**3)
@@ -147,7 +161,11 @@ def _render_gallery(rows: list[dict[str, Any]], output: Path) -> None:
         )
         canvas.paste(target, (80, top + 40))
         canvas.paste(generated, (560, top + 40))
-        draw.text((80, top + 16), "EXACT TARGET (frame 0)", fill=(220, 226, 236))
+        draw.text(
+            (80, top + 16),
+            f"EXACT SUBJECT-BEARING TARGET (frame {row['target_frame_index']})",
+            fill=(220, 226, 236),
+        )
         draw.text((560, top + 16), "GENERATED (same prompt)", fill=(220, 226, 236))
         prompt_lines = _wrap(row["prompt"], 105)[:5]
         for line_index, line in enumerate(prompt_lines):

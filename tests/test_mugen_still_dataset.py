@@ -103,6 +103,31 @@ def test_still_plan_joins_caption_taxonomy_and_preserves_hierarchy(tmp_path) -> 
     assert "right" not in record["prompt"]
     assert record["target"]["frame_count"] == 8
 
+    eligibility = {
+        "artifact_kind": "mugen_subject_bearing_still_frame_eligibility",
+        "counts": {"sequences": 1},
+        "records": [
+            {
+                "eligible_frame_indices": [1, 3],
+                "identity_id": "identity-a",
+                "sequence_id": "sequence-a",
+                "split": "train",
+            }
+        ],
+        "source": {
+            "caption_manifest_file_sha256": hashlib.sha256(paths[2].read_bytes()).hexdigest(),
+            "materialization_file_sha256": hashlib.sha256(paths[0].read_bytes()).hexdigest(),
+        },
+    }
+    eligibility_path = tmp_path / "eligibility.json"
+    eligibility_path.write_text(json.dumps(eligibility), encoding="utf-8")
+    clean_plan = build_mugen_still_training_plan(*paths, eligibility_path)
+    clean_target = clean_plan["records"][0]["target"]
+    assert clean_plan["schema_version"] == 2
+    assert clean_plan["counts"]["eligible_frames"] == 2
+    assert clean_target["eligible_frame_indices"] == [1, 3]
+    assert clean_target["frame_sampling"] == "uniform_subject_bearing_logical_frame_index"
+
 
 def test_action_phrase_rejects_unknown() -> None:
     assert action_phrase("block") == "blocking in a defensive stance"
