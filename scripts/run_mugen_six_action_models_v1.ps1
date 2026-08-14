@@ -14,6 +14,7 @@ $venvPython = Join-Path $root '.venv\Scripts\python.exe'
 $processed = Join-Path $root 'data\processed'
 $reports = Join-Path $root 'data\index\reports'
 $experiments = Join-Path $root 'data\experiments'
+$inference = Join-Path $root 'data\inference'
 $stillPlan = Join-Path $processed 'mugen-six-action-broad-still-plan-v1.json'
 $latents = Join-Path $processed 'mugen-six-action-broad-rgba-latents-2x-v1\manifest.json'
 $coverageCaptioned = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-captioned-v1.json'
@@ -21,6 +22,8 @@ $textBase = Join-Path $processed 'mugen-six-action-broad-sd14-clip-token-states-
 $motionArtifactsBase = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-motion-v1'
 $stillBase = Join-Path $experiments 'mugen-six-action-still-dit-scratch-v1-step50000'
 $motionBase = Join-Path $experiments 'mugen-six-action-dense-latent-motion-scratch-v1-step50000'
+$codecCheckpoint = Join-Path $experiments `
+    'mugen-six-action-rgba-autoencoder-2x-v1-20000\training-step-0020000.pt'
 $clipModel = Join-Path $root 'data\models\stable-diffusion-v1-4-eb7ecef2ce03-training-components'
 $clipIndexSha256 = '6c02b65f1d657f8db316c4976248b0ca6d2406b3396025e801b45c3ef6a91b47'
 
@@ -37,6 +40,7 @@ foreach ($input in @(
     $stillPlan,
     $latents,
     $coverageCaptioned,
+    $codecCheckpoint,
     (Join-Path $clipModel 'source-index.json')
 )) {
     if (-not (Test-Path -LiteralPath $input)) {
@@ -187,6 +191,27 @@ if (-not (Test-Path -LiteralPath (Join-Path $still.Output 'training-report.json'
     throw 'Still DiT did not publish its final report'
 }
 
+$stillInferenceBase = Join-Path $inference `
+    'mugen-six-action-still-dit-scratch-v1-step50000-split-sample'
+$stillInference = Resolve-ImmutableArtifactDirectory `
+    -Base $stillInferenceBase -CompletionFile 'selection.json'
+if (-not (Test-Path -LiteralPath (Join-Path $stillInference 'selection.json'))) {
+    Assert-GpuIdle
+    $stillCheckpoint = Join-Path $still.Output 'checkpoint-ema.pt'
+    Invoke-LoggedProcess -Executable $python `
+        -LogStem (Split-Path $stillInference -Leaf) -Arguments @(
+            (Join-Path $root 'scripts\evaluate_mugen_latent_still_v1.py'),
+            '--plan', $stillPlan,
+            '--checkpoint', $stillCheckpoint,
+            '--codec-checkpoint', $codecCheckpoint,
+            '--text-model', $clipModel,
+            '--output', $stillInference,
+            '--per-split', '4',
+            '--sample-steps', '32',
+            '--guidance-scale', '3.5'
+        )
+}
+
 $motion = Resolve-TrainingLaunch -Base $motionBase
 if (-not $motion.Complete) {
     Assert-GpuIdle
@@ -205,4 +230,24 @@ if (-not $motion.Complete) {
 }
 if (-not (Test-Path -LiteralPath (Join-Path $motion.Output 'training-report.json'))) {
     throw 'Motion DiT did not publish its final report'
+}
+
+$motionInferenceBase = Join-Path $inference `
+    'mugen-six-action-dense-latent-motion-scratch-v1-step50000-test'
+$motionInference = Resolve-ImmutableArtifactDirectory `
+    -Base $motionInferenceBase -CompletionFile 'evaluation-report.json'
+if (-not (Test-Path -LiteralPath (Join-Path $motionInference 'evaluation-report.json'))) {
+    Assert-GpuIdle
+    $motionCheckpoint = Join-Path $motion.Output 'checkpoint-ema.pt'
+    $motionCheckpointSha256 = (
+        Get-FileHash -LiteralPath $motionCheckpoint -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    Invoke-LoggedProcess -Executable $python `
+        -LogStem (Split-Path $motionInference -Leaf) -Arguments @(
+            (Join-Path $root 'scripts\evaluate_mugen_latent_motion_v1.py'),
+            '--checkpoint', $motionCheckpoint,
+            '--expected-sha256', $motionCheckpointSha256,
+            '--output-name', (Split-Path $motionInference -Leaf),
+            '--manifest', $motionManifest
+        )
 }
