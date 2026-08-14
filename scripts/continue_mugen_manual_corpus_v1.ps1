@@ -36,20 +36,36 @@ if (-not (Test-Path -LiteralPath (Join-Path $jusOutput 'materialization.json')))
     throw 'JUS retry did not publish a complete materialization'
 }
 
-if (-not (Test-Path -LiteralPath $ascensionOutput)) {
+if (-not (Test-Path -LiteralPath (Join-Path $ascensionOutput 'materialization.json'))) {
     $ascensionOut = Join-Path $reports 'mugen-anime-ascension-full-materialization-v2.out.log'
     $ascensionErr = Join-Path $reports 'mugen-anime-ascension-full-materialization-v2.err.log'
-    if ((Test-Path -LiteralPath $ascensionOut) -or (Test-Path -LiteralPath $ascensionErr)) {
-        throw 'Refusing to replace Anime Ascension materialization logs'
+    if (-not (Test-Path -LiteralPath $ascensionOut) -and -not (Test-Path -LiteralPath $ascensionErr)) {
+        $ascension = Start-Process -FilePath $python -ArgumentList @(
+            $runner,
+            '--profile',
+            'anime-ascension-4000'
+        ) -WorkingDirectory $root -WindowStyle Hidden -Wait -PassThru `
+            -RedirectStandardOutput $ascensionOut -RedirectStandardError $ascensionErr
+        if ($ascension.ExitCode -ne 0) {
+            throw "Anime Ascension materialization exited with code $($ascension.ExitCode)"
+        }
     }
-    $ascension = Start-Process -FilePath $python -ArgumentList @(
+}
+if (-not (Test-Path -LiteralPath (Join-Path $ascensionOutput 'materialization.json'))) {
+    $retryOut = Join-Path $reports 'mugen-anime-ascension-full-materialization-v2-retry.out.log'
+    $retryErr = Join-Path $reports 'mugen-anime-ascension-full-materialization-v2-retry.err.log'
+    if ((Test-Path -LiteralPath $retryOut) -or (Test-Path -LiteralPath $retryErr)) {
+        throw 'Refusing to replace Anime Ascension retry logs'
+    }
+    $retry = Start-Process -FilePath $python -ArgumentList @(
         $runner,
         '--profile',
-        'anime-ascension-4000'
+        'anime-ascension-4000',
+        '--retry-failed'
     ) -WorkingDirectory $root -WindowStyle Hidden -Wait -PassThru `
-        -RedirectStandardOutput $ascensionOut -RedirectStandardError $ascensionErr
-    if ($ascension.ExitCode -ne 0) {
-        throw "Anime Ascension materialization exited with code $($ascension.ExitCode)"
+        -RedirectStandardOutput $retryOut -RedirectStandardError $retryErr
+    if ($retry.ExitCode -ne 0) {
+        throw "Anime Ascension retry exited with code $($retry.ExitCode)"
     }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $ascensionOutput 'materialization.json'))) {
