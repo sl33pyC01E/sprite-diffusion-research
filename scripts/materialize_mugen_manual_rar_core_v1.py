@@ -37,6 +37,7 @@ PROFILES = {
 }
 EXCLUDED_NO_RENDERABLE_CORE_EXIT_CODE = 3
 EXACT_DUPLICATE_EXIT_CODE = 4
+PROJECTION_VERSION = 2
 
 
 def main() -> int:
@@ -44,10 +45,13 @@ def main() -> int:
     parser.add_argument("--profile", choices=tuple(PROFILES), required=True)
     parser.add_argument("--max-new-variants", type=int)
     parser.add_argument("--worker-timeout-seconds", type=int, default=900)
+    parser.add_argument("--worker-attempts", type=int, default=2)
     parser.add_argument("--retry-failed", action="store_true")
     args = parser.parse_args()
     if args.max_new_variants is not None and args.max_new_variants <= 0:
         raise ValueError("--max-new-variants must be positive")
+    if args.worker_attempts <= 0:
+        raise ValueError("--worker-attempts must be positive")
     profile = PROFILES[args.profile]
     output: Path = profile["output"]
     stage: Path = profile["stage"]
@@ -78,36 +82,46 @@ def main() -> int:
         if args.max_new_variants is not None and new_count >= args.max_new_variants:
             break
         guard.require_capacity(8 * 1024**2, label="next streamed MUGEN variant")
-        try:
-            worker_record = dict(record)
-            fingerprint = _catalog_fingerprint(record)
-            worker_record["known_exact_pair_candidates"] = known_pairs.get(fingerprint, [])
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(worker),
-                    "--profile",
-                    args.profile,
-                    "--stage-root",
-                    str(stage),
-                ],
-                input=_canonical(worker_record),
-                capture_output=True,
-                check=False,
-                timeout=args.worker_timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as error:
+        worker_record = dict(record)
+        fingerprint = _catalog_fingerprint(record)
+        worker_record["known_exact_pair_candidates"] = known_pairs.get(fingerprint, [])
+        result = None
+        attempt_count = 0
+        accepted_codes = {0, EXCLUDED_NO_RENDERABLE_CORE_EXIT_CODE, EXACT_DUPLICATE_EXIT_CODE}
+        for _attempt_count in range(1, args.worker_attempts + 1):
+            attempt_count = _attempt_count
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(worker),
+                        "--profile",
+                        args.profile,
+                        "--stage-root",
+                        str(stage),
+                    ],
+                    input=_canonical(worker_record),
+                    capture_output=True,
+                    check=False,
+                    timeout=args.worker_timeout_seconds,
+                )
+            except subprocess.TimeoutExpired:
+                result = None
+            if result is not None and result.returncode in accepted_codes:
+                break
+        if result is None:
             status = {
                 "status": "failed",
                 "timeout_seconds": args.worker_timeout_seconds,
                 "variant_id": record["variant_id"],
+                "worker_attempts": attempt_count,
             }
             _append(status_journal, status)
             statuses[record["variant_id"]] = status
             new_count += 1
             print(
                 f"[{position}/{len(records)}] {record['variant_id']}: timed out "
-                f"after {error.timeout}s",
+                f"after {attempt_count} attempts",
                 flush=True,
             )
             continue
@@ -119,6 +133,7 @@ def main() -> int:
                 "clip_count": len(character["clips"]),
                 "status": "materialized",
                 "variant_id": record["variant_id"],
+                "worker_attempts": attempt_count,
             }
             known_pairs.setdefault(fingerprint, []).append(
                 {
@@ -152,7 +167,9 @@ def main() -> int:
                 "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
                 "stderr_tail": result.stderr.decode("utf-8", "replace")[-4000:],
                 "variant_id": record["variant_id"],
+                "worker_attempts": attempt_count,
             }
+        status["worker_attempts"] = attempt_count
         _append(status_journal, status)
         statuses[record["variant_id"]] = status
         new_count += 1
@@ -187,8 +204,12 @@ def main() -> int:
     )
     if set(characters) != set(materialized_ids):
         raise ValueError("character journal differs from materialized status rows")
-    character_rows = [characters[key] for key in materialized_ids]
-    status_rows = [statuses[key] for key in sorted(statuses)]
+    character_rows = [
+        {**characters[key], "projection_version": PROJECTION_VERSION} for key in materialized_ids
+    ]
+    status_rows = [
+        {**statuses[key], "projection_version": PROJECTION_VERSION} for key in sorted(statuses)
+    ]
     clips = [clip for character in character_rows for clip in character["clips"]]
     artifact = {
         "artifact_kind": "mugen_manual_rar_fixed_schema_core_materialization",
@@ -218,6 +239,7 @@ def main() -> int:
             "runtime": "no CMD/CNS/ST or executable content interpreted or executed",
             "split": "unset until cross-corpus exact SFF/array duplicate components are built",
         },
+        "projection_version": PROJECTION_VERSION,
         "schema_version": 1,
         "source": {
             "catalog_path": str(catalog),

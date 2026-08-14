@@ -113,6 +113,7 @@ def main() -> int:
             "canonical_identity_id": candidate["identity_id"],
             "canonical_variant_id": candidate["variant_id"],
             "definitions": record["definitions"],
+            "projection_version": PROJECTION_VERSION,
             "reason": "exact_air_and_sff_duplicate",
             "source": {
                 "air": record["air"],
@@ -154,6 +155,7 @@ def main() -> int:
                 }
                 for row in plan.exclusions
             ],
+            "projection_version": PROJECTION_VERSION,
             "reason": "no_canonical_core_action_rendered",
             "source": {
                 "air": record["air"],
@@ -285,6 +287,7 @@ def main() -> int:
             }
             for row in plan.exclusions
         ],
+        "projection_version": PROJECTION_VERSION,
         "source": {
             "air": record["air"],
             "archive_sha256": profile["archive_sha256"],

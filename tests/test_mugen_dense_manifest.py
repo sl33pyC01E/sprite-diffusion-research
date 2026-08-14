@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from spritelab.mugen_dense_manifest import (
+    build_mugen_dense_manifest,
+    export_mugen_dense_manifest,
+)
+from spritelab.mugen_stream_quality import export_mugen_stream_quality_audit
+from spritelab.storage import DiskGuard
+
+
+def _array_sha256(value: np.ndarray) -> str:
+    header = f"{value.dtype.str}\0{'x'.join(str(item) for item in value.shape)}\0".encode()
+    return hashlib.sha256(header + value.tobytes(order="C")).hexdigest()
+
+
+def _root(root: Path, *, variant: str, sff_sha: str, shared_idle: np.ndarray) -> Path:
+    root.mkdir()
+    clips = []
+    for index, slot in enumerate(("idle", "walk", "jump", "block", "attack_a", "attack_b")):
+        if slot == "idle":
+            value = shared_idle.copy()
+        else:
+            value = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+            value[:, 20:24, 30 + index : 34 + index] = (index, 2, 3, 255)
+            value[4:, 24:28, 30 + index : 34 + index] = (4, 5, 6, 255)
+        path = root / f"{variant}-{slot}.npy"
+        np.save(path, value, allow_pickle=False)
+        clips.append(
+            {
+                "action_number": index,
+                "array": {
+                    "array_content_sha256": _array_sha256(value),
+                    "file_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "relative_path": path.name,
+                },
+                "clipped_visible_pixels": 0,
+                "loop_mode": "loop",
+                "record_id": f"record-{variant}-{slot}",
+                "schema_phase": None,
+                "schema_verb": slot,
+                "slot": slot,
+                "source_action_index": index,
+                "temporal_selection": {"source_frame_count": 2},
+            }
+        )
+    character = {
+        "clips": clips,
+        "complete_six_slot_core": True,
+        "definitions": [{"display_name": variant, "name": variant}],
+        "identity_id": f"identity-{variant}",
+        "source": {
+            "air": {"sha256": "b" * 64},
+            "archive_sha256": "c" * 64,
+            "sff": {"sha256": sff_sha},
+        },
+        "variant_id": variant,
+        "world_view_transform": {"scale": 1.0},
+    }
+    (root / "materialization.json").write_text(
+        json.dumps({"characters": [character], "projection_version": 2}), encoding="utf-8"
+    )
+    return root
+
+
+def test_dense_manifest_keeps_exact_array_duplicates_in_one_split(tmp_path: Path) -> None:
+    idle = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+    idle[:, 10:14, 10:14] = (1, 2, 3, 255)
+    idle[4:, 14:18, 10:14] = (3, 2, 1, 255)
+    first = _root(tmp_path / "first", variant="variant-a", sff_sha="a" * 64, shared_idle=idle)
+    second = _root(tmp_path / "second", variant="variant-b", sff_sha="d" * 64, shared_idle=idle)
+    quality = tmp_path / "quality.json"
+    export_mugen_stream_quality_audit((first, second), quality, disk_guard=DiskGuard(tmp_path, 0))
+
+    manifest = build_mugen_dense_manifest((first, second), quality)
+
+    assert manifest["counts"]["characters"] == 2
+    assert manifest["counts"]["components"] == 1
+    assert len({row["split"] for row in manifest["records"]}) == 1
+    assert manifest["records"][0]["reference"]["frame_index"] == 0
+    assert len(manifest["records"][0]["reference"]["frame_array_content_sha256"]) == 64
+
+
+def test_dense_manifest_rejects_materialization_changed_after_audit(tmp_path: Path) -> None:
+    idle = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+    idle[:, 10:14, 10:14] = (1, 2, 3, 255)
+    root = _root(tmp_path / "root", variant="variant-a", sff_sha="a" * 64, shared_idle=idle)
+    quality = tmp_path / "quality.json"
+    export_mugen_stream_quality_audit((root,), quality, disk_guard=DiskGuard(tmp_path, 0))
+    with (root / "materialization.json").open("a", encoding="utf-8") as handle:
+        handle.write(" ")
+
+    with pytest.raises(ValueError, match="does not bind materialization"):
+        build_mugen_dense_manifest((root,), quality)
+
+
+def test_dense_manifest_export_is_no_clobber(tmp_path: Path) -> None:
+    idle = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+    idle[:, 10:14, 10:14] = (1, 2, 3, 255)
+    root = _root(tmp_path / "root", variant="variant-a", sff_sha="a" * 64, shared_idle=idle)
+    quality = tmp_path / "quality.json"
+    guard = DiskGuard(tmp_path, 0)
+    export_mugen_stream_quality_audit((root,), quality, disk_guard=guard)
+    output = tmp_path / "dense.json"
+
+    digest = export_mugen_dense_manifest((root,), quality, output, disk_guard=guard)
+
+    assert hashlib.sha256(output.read_bytes()).hexdigest() == digest
+    with pytest.raises(FileExistsError):
+        export_mugen_dense_manifest((root,), quality, output, disk_guard=guard)
