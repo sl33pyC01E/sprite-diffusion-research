@@ -17,15 +17,32 @@ OUTPUT = ROOT / "CogVideoX-5b-I2V-a6f0f4858a83"
 
 def main() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
-    info = model_info(MODEL_ID, revision=REVISION)
+    info = model_info(MODEL_ID, revision=REVISION, files_metadata=True)
     if info.sha != REVISION or info.private or info.gated:
         raise RuntimeError("CogVideoX model identity or access policy differs")
-    snapshot_download(
-        repo_id=MODEL_ID,
-        revision=REVISION,
-        local_dir=OUTPUT,
-        max_workers=4,
+    expected_files = {
+        sibling.rfilename: sibling.size for sibling in info.siblings if sibling.rfilename
+    }
+    complete = bool(expected_files) and all(
+        (OUTPUT / relative).is_file()
+        and (expected_bytes is None or (OUTPUT / relative).stat().st_size == expected_bytes)
+        for relative, expected_bytes in expected_files.items()
     )
+    if not complete:
+        snapshot_download(
+            repo_id=MODEL_ID,
+            revision=REVISION,
+            local_dir=OUTPUT,
+            max_workers=4,
+        )
+    missing_or_wrong = [
+        relative
+        for relative, expected_bytes in expected_files.items()
+        if not (OUTPUT / relative).is_file()
+        or (expected_bytes is not None and (OUTPUT / relative).stat().st_size != expected_bytes)
+    ]
+    if missing_or_wrong:
+        raise RuntimeError(f"CogVideoX snapshot closure differs: {missing_or_wrong}")
     records = []
     for path in sorted(
         (path for path in OUTPUT.rglob("*") if path.is_file()),
