@@ -105,17 +105,21 @@ function Resolve-TrainingLaunch {
     throw "No immutable continuation slot remains for $Base"
 }
 
-function Assert-GpuIdle {
-    $usedMemory = (& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits |
-        Select-Object -First 1).Trim()
-    $memoryMiB = 0
-    if (-not [int]::TryParse($usedMemory, [ref]$memoryMiB)) {
-        throw "Could not parse local GPU memory use: $usedMemory"
-    }
-    $compute = (& nvidia-smi --query-compute-apps=pid,process_name,used_memory `
-        --format=csv,noheader) -join "`n"
-    if ($memoryMiB -ge 4096 -or $compute -match '(?i)python|torch|cuda') {
-        throw "Local GPU is not idle (memory MiB=$memoryMiB):`n$compute"
+function Wait-GpuIdle {
+    while ($true) {
+        $usedMemory = (& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits |
+            Select-Object -First 1).Trim()
+        $memoryMiB = 0
+        if (-not [int]::TryParse($usedMemory, [ref]$memoryMiB)) {
+            throw "Could not parse local GPU memory use: $usedMemory"
+        }
+        $compute = (& nvidia-smi --query-compute-apps=pid,process_name,used_memory `
+            --format=csv,noheader) -join "`n"
+        if ($memoryMiB -lt 4096 -and $compute -notmatch '(?i)python|torch|cuda') {
+            return
+        }
+        Write-Output "Waiting for local GPU idleness (memory MiB=$memoryMiB)."
+        Start-Sleep -Seconds 30
     }
 }
 
@@ -140,7 +144,7 @@ function Invoke-LoggedProcess {
     }
 }
 
-Assert-GpuIdle
+Wait-GpuIdle
 
 $textOutput = Resolve-ImmutableArtifactDirectory -Base $textBase -CompletionFile 'manifest.json'
 $textManifest = Join-Path $textOutput 'manifest.json'
@@ -171,7 +175,7 @@ if (-not (Test-Path -LiteralPath $motionManifest)) {
 
 $still = Resolve-TrainingLaunch -Base $stillBase
 if (-not $still.Complete) {
-    Assert-GpuIdle
+    Wait-GpuIdle
     $arguments = @(
         (Join-Path $root 'scripts\train_mugen_latent_still_dit_v1.py'),
         '--plan', $stillPlan,
@@ -196,7 +200,7 @@ $stillInferenceBase = Join-Path $inference `
 $stillInference = Resolve-ImmutableArtifactDirectory `
     -Base $stillInferenceBase -CompletionFile 'selection.json'
 if (-not (Test-Path -LiteralPath (Join-Path $stillInference 'selection.json'))) {
-    Assert-GpuIdle
+    Wait-GpuIdle
     $stillCheckpoint = Join-Path $still.Output 'checkpoint-ema.pt'
     Invoke-LoggedProcess -Executable $python `
         -LogStem (Split-Path $stillInference -Leaf) -Arguments @(
@@ -214,7 +218,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $stillInference 'selection.json'))) 
 
 $motion = Resolve-TrainingLaunch -Base $motionBase
 if (-not $motion.Complete) {
-    Assert-GpuIdle
+    Wait-GpuIdle
     $arguments = @(
         (Join-Path $root 'scripts\run_mugen_latent_motion_train_v1.py'),
         '--profile', 'corpus50000',
@@ -237,7 +241,7 @@ $motionInferenceBase = Join-Path $inference `
 $motionInference = Resolve-ImmutableArtifactDirectory `
     -Base $motionInferenceBase -CompletionFile 'evaluation-report.json'
 if (-not (Test-Path -LiteralPath (Join-Path $motionInference 'evaluation-report.json'))) {
-    Assert-GpuIdle
+    Wait-GpuIdle
     $motionCheckpoint = Join-Path $motion.Output 'checkpoint-ema.pt'
     $motionCheckpointSha256 = (
         Get-FileHash -LiteralPath $motionCheckpoint -Algorithm SHA256

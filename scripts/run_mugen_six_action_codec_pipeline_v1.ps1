@@ -34,17 +34,25 @@ foreach ($output in @($run, $audit, $latents)) {
     }
 }
 
-$usedMemory = (& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits |
-    Select-Object -First 1).Trim()
-$memoryMiB = 0
-if (-not [int]::TryParse($usedMemory, [ref]$memoryMiB)) {
-    throw "Could not parse local GPU memory use: $usedMemory"
+function Wait-GpuIdle {
+    while ($true) {
+        $usedMemory = (& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits |
+            Select-Object -First 1).Trim()
+        $memoryMiB = 0
+        if (-not [int]::TryParse($usedMemory, [ref]$memoryMiB)) {
+            throw "Could not parse local GPU memory use: $usedMemory"
+        }
+        $compute = (& nvidia-smi --query-compute-apps=pid,process_name,used_memory `
+            --format=csv,noheader) -join "`n"
+        if ($memoryMiB -lt 4096 -and $compute -notmatch '(?i)python|torch|cuda') {
+            return
+        }
+        Write-Output "Waiting for local GPU idleness (memory MiB=$memoryMiB)."
+        Start-Sleep -Seconds 30
+    }
 }
-$compute = (& nvidia-smi --query-compute-apps=pid,process_name,used_memory `
-    --format=csv,noheader) -join "`n"
-if ($memoryMiB -ge 4096 -or $compute -match '(?i)python|torch|cuda') {
-    throw "Local GPU is not idle (memory MiB=$memoryMiB):`n$compute"
-}
+
+Wait-GpuIdle
 
 $trainOut = Join-Path $reports 'mugen-six-action-rgba-autoencoder-2x-v1-20000.out.log'
 $trainErr = Join-Path $reports 'mugen-six-action-rgba-autoencoder-2x-v1-20000.err.log'
