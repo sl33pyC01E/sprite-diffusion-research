@@ -141,7 +141,11 @@ def main() -> int:
         )
         palette_count = None
     else:
-        sprites, palettes = decode_sff_v2(sff_payload)
+        sprites, palettes = decode_sff_v2(
+            sff_payload,
+            recover_invalid_sprites=True,
+            exclusions=decode_exclusions,
+        )
         palette_count = len(palettes)
     plan = select_mugen_core_materializations(actions, sprites)
     if not plan.selected:

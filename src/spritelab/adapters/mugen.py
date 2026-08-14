@@ -220,6 +220,17 @@ class MugenSffV2Sprite:
 
 
 @dataclass(frozen=True)
+class MugenSffV2DecodeExclusion:
+    """One corrupt SFF v2 sprite skipped by explicit recovery mode."""
+
+    archive_index: int
+    group_number: int
+    image_number: int
+    reason: str
+    detail: str
+
+
+@dataclass(frozen=True)
 class MugenCharacterArchiveAudit:
     archive_sha256: str
     archive_bytes: int
@@ -702,6 +713,9 @@ def decode_sff_v1(
 
 def decode_sff_v2(
     payload: bytes,
+    *,
+    recover_invalid_sprites: bool = False,
+    exclusions: list[MugenSffV2DecodeExclusion] | None = None,
 ) -> tuple[tuple[MugenSffV2Sprite, ...], tuple[MugenSffV2Palette, ...]]:
     """Decode SFF v2 sprites/palettes without invoking a M.U.G.E.N runtime.
 
@@ -778,7 +792,7 @@ def decode_sff_v2(
             )
         )
 
-    sprites: list[MugenSffV2Sprite] = []
+    sprite_slots: list[MugenSffV2Sprite | None] = []
     for archive_index in range(sprite_count):
         offset = first_sprite_header + archive_index * 28
         (
@@ -796,40 +810,39 @@ def decode_sff_v2(
             palette_index,
             flags,
         ) = struct.unpack_from("<4H2hH2B2I2H", payload, offset)
-        linked: int | None = None
-        indices: bytes | None
-        effective_palette: int | None = palette_index
-        if data_bytes == 0:
-            linked = link
-            if linked >= len(sprites):
-                raise ValueError(
-                    f"SFF v2 sprite {archive_index} links to unavailable index {linked}"
+        try:
+            linked: int | None = None
+            indices: bytes | None
+            effective_palette: int | None = palette_index
+            if data_bytes == 0:
+                linked = link
+                if linked >= len(sprite_slots) or sprite_slots[linked] is None:
+                    raise ValueError(f"links to unavailable index {linked}")
+                source = sprite_slots[linked]
+                assert source is not None
+                width, height = source.width, source.height
+                indices, rgba = source.indices, source.rgba
+                effective_palette = source.palette_index
+            else:
+                base = literal_data_offset if flags & 1 == 0 else translated_data_offset
+                start = base + data_offset
+                _bounded_region(payload, start, data_bytes, f"sprite {archive_index}")
+                encoded = payload[start : start + data_bytes]
+                indices, rgba = _decode_sff_v2_pixels(
+                    encoded,
+                    width=width,
+                    height=height,
+                    pixel_format=pixel_format,
+                    color_depth=color_depth,
+                    palette=(
+                        palettes[palette_index].rgba if palette_index < len(palettes) else None
+                    ),
                 )
-            source = sprites[linked]
-            width, height = source.width, source.height
-            indices, rgba = source.indices, source.rgba
-            effective_palette = source.palette_index
-        else:
-            base = literal_data_offset if flags & 1 == 0 else translated_data_offset
-            start = base + data_offset
-            _bounded_region(payload, start, data_bytes, f"sprite {archive_index}")
-            encoded = payload[start : start + data_bytes]
-            indices, rgba = _decode_sff_v2_pixels(
-                encoded,
-                width=width,
-                height=height,
-                pixel_format=pixel_format,
-                color_depth=color_depth,
-                palette=(palettes[palette_index].rgba if palette_index < len(palettes) else None),
-            )
-            if indices is not None and palette_index >= len(palettes):
-                raise ValueError(
-                    f"SFF v2 sprite {archive_index} references absent palette {palette_index}"
-                )
-        if len(rgba) != width * height * 4:
-            raise ValueError(f"SFF v2 sprite {archive_index} decoded RGBA size mismatch")
-        sprites.append(
-            MugenSffV2Sprite(
+                if indices is not None and palette_index >= len(palettes):
+                    raise ValueError(f"references absent palette {palette_index}")
+            if len(rgba) != width * height * 4:
+                raise ValueError("decoded RGBA size mismatch")
+            sprite = MugenSffV2Sprite(
                 archive_index=archive_index,
                 group_number=group,
                 image_number=image,
@@ -848,8 +861,23 @@ def decode_sff_v2(
                 ),
                 rgba_sha256=hashlib.sha256(rgba).hexdigest(),
             )
-        )
-    return tuple(sprites), tuple(palettes)
+        except ValueError as error:
+            if not recover_invalid_sprites:
+                raise ValueError(f"SFF v2 sprite {archive_index} {error}") from error
+            if exclusions is not None:
+                exclusions.append(
+                    MugenSffV2DecodeExclusion(
+                        archive_index=archive_index,
+                        group_number=group,
+                        image_number=image,
+                        reason="invalid_link" if data_bytes == 0 else "invalid_pixels",
+                        detail=str(error),
+                    )
+                )
+            sprite_slots.append(None)
+        else:
+            sprite_slots.append(sprite)
+    return tuple(sprite for sprite in sprite_slots if sprite is not None), tuple(palettes)
 
 
 def audit_character_zip_variants(

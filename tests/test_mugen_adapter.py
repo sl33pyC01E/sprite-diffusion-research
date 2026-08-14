@@ -252,6 +252,27 @@ def test_sff_v2_decodes_palette_raw_and_rle8() -> None:
     assert legacy_sprites[0].rgba == compressed_sprites[0].rgba
 
 
+def test_sff_v2_recovery_quarantines_invalid_compressed_sprite() -> None:
+    palette = bytearray(1024)
+    corrupt = _sff_v2_fixture(struct.pack("<I", 4) + bytes((0x45, 1)), palette, pixel_format=2)
+    exclusions = []
+
+    with pytest.raises(ValueError, match="run exceeds pixel count"):
+        decode_sff_v2(corrupt)
+
+    sprites, palettes = decode_sff_v2(
+        corrupt,
+        recover_invalid_sprites=True,
+        exclusions=exclusions,
+    )
+
+    assert sprites == ()
+    assert len(palettes) == 1
+    assert exclusions[0].archive_index == 0
+    assert exclusions[0].reason == "invalid_pixels"
+    assert "run exceeds pixel count" in exclusions[0].detail
+
+
 def test_character_zip_audit_never_interprets_runtime_logic() -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
