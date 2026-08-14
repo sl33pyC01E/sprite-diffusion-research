@@ -323,3 +323,22 @@ the canonical primary-motion manifest excludes it. Therefore
 `data/inference/mugen-mffa-sd14-lora-step2500-heldout-comparison-v1/` must not be
 shown as valid target/generation evidence. Its retained files document why the
 subject-bearing gate was added; they do not describe the corrected corpus.
+
+### Advanced combat-action admission
+
+The coarse action-number taxonomy contains materially more combat evidence than
+the first primary-motion model uses: 2,603 normal attacks, 710 special attacks,
+123 super attacks, and 129 blocks before subject/pixel gating.  Exact all-frame
+pixel gating plus one representative per identity/verb leaves 217 normal attacks,
+132 special attacks, 23 super attacks, and 48 blocks.  These counts are sufficient
+to investigate separate combat tokens, but an action-number tier alone does not
+prove that the visible clip is a clean primary-fighter motion rather than a full
+screen effect, assist, transformation, or projectile-only sequence.
+
+`mugen-mffa-combat-motion-role-vlm-sample-v1.json` therefore selects 32 stable,
+all-frame pixel-passing examples for each of `block`, `normal_attack`,
+`special_attack`, and `super_attack`, stratified across the immutable identity
+splits where available.  Its 128 contact sheets are intended for the pinned
+Qwen-3.5-122B same-subject/action-match audit.  No special/super token is admitted
+to the canonical trainer until that audit passes; rejected and ambiguous clips
+remain indexed instead of being silently coerced.

@@ -36,11 +36,20 @@ MODEL = "qwen3.5-122b"
 USE_RESPONSE_FORMAT = False
 
 
-def main(*, endpoint: str, workers: int, prepare_only: bool) -> None:
+def main(
+    *,
+    endpoint: str,
+    workers: int,
+    prepare_only: bool,
+    sample_path: Path = SAMPLE,
+    output_root: Path = OUTPUT_ROOT,
+) -> None:
     if workers <= 0:
         raise ValueError("workers must be positive")
     guard = DiskGuard(ROOT, min_free_bytes=100 * 1024**3)
-    sample_bytes = SAMPLE.read_bytes()
+    sample_file = sample_path.resolve()
+    output = output_root.resolve()
+    sample_bytes = sample_file.read_bytes()
     sample = _object(sample_bytes, "sample")
     plan_bytes = PLAN.read_bytes()
     plan = _object(plan_bytes, "plan")
@@ -59,8 +68,8 @@ def main(*, endpoint: str, workers: int, prepare_only: bool) -> None:
     materialization_path = Path(plan["source"]["materialization"]["path"]).resolve()
     if _file_sha256(materialization_path) != plan["source"]["materialization"]["file_sha256"]:
         raise RuntimeError("materialization hash differs")
-    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    input_dir = OUTPUT_ROOT / "contact-sheets"
+    output.mkdir(parents=True, exist_ok=True)
+    input_dir = output / "contact-sheets"
     input_dir.mkdir(parents=True, exist_ok=True)
     prepared = {
         record["sequence_id"]: _prepare(
@@ -68,13 +77,14 @@ def main(*, endpoint: str, workers: int, prepare_only: bool) -> None:
             sequence_by_id=sequence_by_id,
             materialization_root=materialization_path.parent,
             input_dir=input_dir,
+            output_root=output,
         )
         for record in records
     }
     if prepare_only:
-        print(json.dumps({"prepared": len(prepared), "root": str(OUTPUT_ROOT)}, sort_keys=True))
+        print(json.dumps({"prepared": len(prepared), "root": str(output)}, sort_keys=True))
         return
-    journal = OUTPUT_ROOT / "records.jsonl"
+    journal = output / "records.jsonl"
     completed = _load_journal(journal)
     pending = [record for record in records if record["sequence_id"] not in completed]
     print(
@@ -106,7 +116,7 @@ def main(*, endpoint: str, workers: int, prepare_only: bool) -> None:
                     flush=True,
                 )
     ordered = [completed[record["sequence_id"]] for record in records]
-    manifest_path = OUTPUT_ROOT / "manifest.json"
+    manifest_path = output / "manifest.json"
     if manifest_path.exists():
         raise FileExistsError(f"Refusing to replace role manifest: {manifest_path}")
     valid = [record for record in ordered if isinstance(record.get("decision"), dict)]
@@ -162,6 +172,7 @@ def _prepare(
     sequence_by_id: dict[str, dict[str, Any]],
     materialization_root: Path,
     input_dir: Path,
+    output_root: Path,
 ) -> dict[str, Any]:
     sequence_id = record["sequence_id"]
     plan_record = sequence_by_id[sequence_id]
@@ -188,7 +199,7 @@ def _prepare(
             os.fsync(handle.fileno())
     return {
         "contact_sheet_file_sha256": sheet_sha256,
-        "contact_sheet_relative_path": sheet_path.relative_to(OUTPUT_ROOT).as_posix(),
+        "contact_sheet_relative_path": sheet_path.relative_to(output_root).as_posix(),
         "sheet_png": sheet,
     }
 
@@ -318,5 +329,13 @@ if __name__ == "__main__":
     parser.add_argument("--endpoint", default="http://spark:8080/v1/chat/completions")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--sample", type=Path, default=SAMPLE)
+    parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
     args = parser.parse_args()
-    main(endpoint=args.endpoint, workers=args.workers, prepare_only=args.prepare_only)
+    main(
+        endpoint=args.endpoint,
+        workers=args.workers,
+        prepare_only=args.prepare_only,
+        sample_path=args.sample,
+        output_root=args.output_root,
+    )
