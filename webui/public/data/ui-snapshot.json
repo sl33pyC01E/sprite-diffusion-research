@@ -1,0 +1,78 @@
+{
+  "artifact_kind": "spritelab_webui_summary",
+  "schema_version": 1,
+  "exported_at": "2026-08-14",
+  "claim_scope": "Static summary for the interactive research console; canonical provenance and model reports remain authoritative.",
+  "provenance": {
+    "bundle_sha256": "64b8f0210583cbd5d994114a0490afa55d7821e115e12df19fdeceaee6e2a8e6",
+    "database_sha256": "6f3802aaed83cdc1ee4e3a8a3588328433f11b8c5b708c2aa1bb7c6a6a1dca87",
+    "sources": 48,
+    "entities": 5111,
+    "sequences": 26196,
+    "ordered_frames": 165403,
+    "occurrences": 318009,
+    "archive_members": 237749,
+    "media_observations": 123702
+  },
+  "tmwa_causal16_step_2000": {
+    "checkpoint_sha256": "5b944cb24ded9a046a2e3d7af7a8d2264eb673added068f5f6218039d19cf8c8",
+    "report_sha256": "80dab913e390e8bed42241f383b8b327d8053575a76f746a07b34dc2ebca4fa0",
+    "matched_evaluation_sha256": "2491272f1abf91784c4f2d4b3e066bf381f7bfe2ad9b4099f364e10600c4c15c",
+    "causal_audit_sha256": "36679a485fd68673852f3866445fed7e3c1333c2e84d17b3ae1fe94e011dde66",
+    "endpoint_pm_rgba_mae": 0.041747389594092965,
+    "alpha_iou_at_127": 0.8638084191489491,
+    "generated_to_target_action_separation_ratio": 0.6178837427690094,
+    "idle_to_walk_moves_toward_replacement": 6,
+    "walk_correct_target_preference": 4,
+    "pair_count": 8,
+    "claim": "In-sample memorization and stronger action-token sensitivity only; not held-out or open-vocabulary generation."
+  },
+  "tmwa_causal16_alpha4_step_6000": {
+    "checkpoint_sha256": "394880c5e067059f01b1f9c2462e75bae66705944e11f04c0a5b058e9689b761",
+    "report_sha256": "7fef539de909b6612de95c40168c98de02f25f93078433adcd6ec529f26e01de",
+    "matched_evaluation_sha256": "a1e151788c00f977d5b167e1e39a71bb02682ac8234cbd235c6a496afb5504cd",
+    "decode_bundle_sha256": "25c78b85b6dc9f6c463e081c5504203881d134842c3bc7427e2d0c2612a22aa0",
+    "endpoint_pm_rgba_mae": 0.024113,
+    "endpoint_target_visible_pm_rgba_mae": 0.062863,
+    "endpoint_target_background_pm_rgba_mae": 0.012851,
+    "alpha_iou_at_127": 0.979635,
+    "temporal_delta_mae": 0.016642,
+    "generated_to_target_action_separation_ratio": 1.1021,
+    "idle_to_walk_moves_toward_replacement": 8,
+    "walk_correct_target_preference": 8,
+    "pair_count": 8,
+    "claim": "Selected exact in-sample reconstruction and symmetric action-token sensitivity checkpoint; not held-out or open-vocabulary generation."
+  },
+  "staged_mugen_latent_motion": {
+    "dense_coverage_manifest_sha256": "28c36935322a21e9469131ed3b396b0263cb7cc6a91a900b2527fcdb76ee7238",
+    "motion_plan_sha256": "ad7c27036155498455e51d3cbb26f39f6d7f3d1140f4bb7d5e8b3e94881fae90",
+    "training_manifest_sha256": "b071a02004a486c76b73023bb8fd9678d30741ecb203d46b87e3320e59f0e196",
+    "latent_cache_manifest_sha256": "c5888b7b2c88c33e9bcd2058968d9a4a2bc2b9f0ba261a9e8e7e50f30ea7afb3",
+    "canonical_sequences": 22554,
+    "canonical_identities": 3759,
+    "frames_per_sequence": 8,
+    "ordered_frames": 180432,
+    "verbs": ["attack_a", "attack_b", "block", "idle", "jump", "walk"],
+    "split_identities": {"train": 3442, "validation": 162, "test": 155},
+    "model": "reference-conditioned spatiotemporal DiT in frozen sprite-autoencoder latent space",
+    "claim": "Dense balanced training contract and active scratch-training input only. Broad generated outputs are not published until a checkpoint receives matched in-distribution and identity-disjoint evaluation."
+  },
+  "mugen_rgba_codec_step_20000": {
+    "checkpoint_sha256": "6df0122a17214c3a8cd9edff7b057dc4572e125b0fa556de317b94cff1ac678e",
+    "training_report_sha256": "ddc4c827e7ba1d7abef4726e6a98f378928692ea93206762fe6a1ec04a931767",
+    "independent_audit_sha256": "34736354897a45f72a48b173d5288a097d03fb278aaf62c12836c3d7ae44b79c",
+    "held_out_frames": 512,
+    "premultiplied_rgba_mae": 0.0011034935,
+    "visible_rgb_mae": 0.0145664759,
+    "alpha_iou_at_127": 0.9998417501,
+    "claim": "Identity-disjoint codec reconstruction quality only; this is the frozen latent representation, not sprite generation."
+  },
+  "staged_tgstation_audit": {
+    "audit_sha256": "22cb2cc6bc828c082728287d2c47702834cd23667f01246ec5fc50af60fe2249",
+    "dmi_packs": 401,
+    "states": 11862,
+    "source_cells": 60051,
+    "conservative_whole_entity_sequences": 1680,
+    "live_projection": false
+  }
+}

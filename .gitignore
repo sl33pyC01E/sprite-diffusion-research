@@ -10,6 +10,10 @@ __pycache__/
 data/
 reports/generated/
 
+# The hosted console's small curated summary is source, not corpus storage.
+!webui/public/data/
+!webui/public/data/ui-snapshot.json
+
 # Local credentials and overrides.
 .env
 config.local.toml

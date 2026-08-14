@@ -33,7 +33,7 @@ export type GalleryRecord = {
 };
 
 export const indexSnapshot = {
-  exportedAt: "2026-08-13",
+  exportedAt: "2026-08-14",
   bundleSha256:
     "64b8f0210583cbd5d994114a0490afa55d7821e115e12df19fdeceaee6e2a8e6",
   databaseSha256:
@@ -55,15 +55,15 @@ export const indexSnapshot = {
 export const sources: SourceRecord[] = [
   {
     id: "mugen_mffa",
-    name: "MUGEN / MFFA anime fighters",
+    name: "MUGEN dense six-action fighters",
     kind: "SFF sprites + AIR action timelines",
-    entities: 227,
-    sequences: 5906,
-    frames: 47248,
-    occurrences: 47248,
+    entities: 3759,
+    sequences: 22554,
+    frames: 180432,
+    occurrences: 180432,
     rights: 0,
     stage: "materialized",
-    note: "Offline research corpus, separate from the live SQLite snapshot. The current latent-motion manifest keeps 1,443 canonical identity/action clips; effect-only and subject-absent frames fail closed.",
+    note: "Offline research corpus, separate from the live SQLite snapshot. Every admitted identity contributes idle, walk, jump, block, attack A, and attack B; all 22,554 canonical clips are frozen as eight-frame RGBA targets with identity-disjoint splits.",
   },
   {
     id: "flare_empyrean",
@@ -507,7 +507,7 @@ export const pipelineStages = [
     title: "Latent motion DiT",
     status: "research",
     summary: "A canonical sprite reference plus action tokens drive spatiotemporal flow in a frozen sprite-autoencoder latent space.",
-    details: "The broad MUGEN run uses 1,443 canonical clips across 225 identities. Direct-pixel PixelDiT remains a historical baseline; held-out action transfer is the deciding test.",
+    details: "The active scratch run uses 22,554 balanced clips across 3,759 identities: idle, walk, jump, block, attack A, and attack B. Direct-pixel PixelDiT remains a historical baseline; matched in-distribution fidelity and identity-disjoint transfer are reported separately.",
   },
   {
     id: "evaluate",

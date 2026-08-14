@@ -55,8 +55,19 @@ test("publishes the curated evidence payload and representative animations", asy
   assert.equal(snapshot.tmwa_causal16_step_2000.idle_to_walk_moves_toward_replacement, 6);
   assert.equal(snapshot.tmwa_causal16_alpha4_step_6000.walk_correct_target_preference, 8);
   assert.equal(snapshot.tmwa_causal16_alpha4_step_6000.alpha_iou_at_127, 0.979635);
-  assert.equal(snapshot.staged_mugen_latent_motion.canonical_sequences, 1443);
+  assert.equal(snapshot.staged_mugen_latent_motion.canonical_sequences, 22554);
+  assert.equal(snapshot.staged_mugen_latent_motion.canonical_identities, 3759);
+  assert.deepEqual(snapshot.staged_mugen_latent_motion.verbs, [
+    "attack_a",
+    "attack_b",
+    "block",
+    "idle",
+    "jump",
+    "walk",
+  ]);
   assert.match(snapshot.staged_mugen_latent_motion.model, /latent space/i);
+  assert.equal(snapshot.mugen_rgba_codec_step_20000.held_out_frames, 512);
+  assert.ok(snapshot.mugen_rgba_codec_step_20000.alpha_iou_at_127 > 0.9998);
   assert.equal(galleryManifest.files.length, 21);
   assert.equal(
     galleryManifest.runs.tmwa_causal16_alpha4_step_6000.decode_bundle_sha256,
