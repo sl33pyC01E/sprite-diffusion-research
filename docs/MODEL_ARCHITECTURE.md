@@ -117,6 +117,27 @@ one model to invent identity and movement simultaneously. Generic labels such as
 `attack` remain available, but evidence-backed MUGEN labels such as `normal_attack`,
 `special_attack`, `super_attack`, and `block` are the intended steering interface.
 
+The exact MUGEN stage-two join is published as
+`data/processed/mugen-mffa-reference-motion-plan-v2.json` (SHA-256
+`ad62a5c8ded8bd8b53894c6580db83ae73268de6daf1033cf65228e53e1f9558`). It binds
+5,906 ordered eight-frame target latents to one VLM-selected canonical appearance
+latent per each of 227 identities and retains all 20 structured verbs. There are
+5,679 cross-sequence reference/target pairs and 227 same-sequence pairs. The latter
+are retained deliberately: conditioning an image-to-video model on one exact frame
+from its target clip is standard and preserves 179 otherwise-lost idle examples.
+Identity-disjoint train/validation/test splits remain authoritative, and the plan
+labels the relation explicitly so same-sequence and cross-sequence performance can
+be reported separately.
+
+`ReferenceConditionedLatentMotionDiT` is the corresponding model scaffold. It
+patch-embeds the noised eight-frame latent clip and the single canonical reference
+latent separately, adds the reference tokens at every temporal position, then uses
+factorized spatial/temporal attention plus action/text cross-attention. Its public
+inputs are target/noise `[B,8,8,64,64]`, reference `[B,8,64,64]`, structured/text
+tokens, diffusion time, and eight exact source phases. Its output has the target
+latent shape and is intended for residual/noise prediction; pixels are reconstructed
+only through the frozen high-fidelity RGBA decoder.
+
 ## Public tensor contract
 
 The public video layout is fixed and explicit:
