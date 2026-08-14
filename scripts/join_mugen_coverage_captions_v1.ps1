@@ -24,7 +24,8 @@ foreach ($input in @($dense, $captions)) {
     }
 }
 if (Test-Path -LiteralPath $output) {
-    throw "Refusing to replace coverage caption join: $output"
+    Write-Output "Coverage caption join is already complete: $output"
+    exit 0
 }
 & $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
     $dense $output --caption-manifest $captions

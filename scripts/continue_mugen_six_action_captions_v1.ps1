@@ -16,8 +16,19 @@ $dense = Join-Path $processed 'mugen-six-action-dense-v3.json'
 $broadCaptioned = Join-Path $processed 'mugen-six-action-broad-captioned-v1.json'
 $denseCaptioned = Join-Path $processed 'mugen-six-action-dense-captioned-v3.json'
 $stillPlan = Join-Path $processed 'mugen-six-action-broad-still-plan-v1.json'
-$captionOut = Join-Path $reports 'mugen-six-action-broad-captions-v1.out.log'
-$captionErr = Join-Path $reports 'mugen-six-action-broad-captions-v1.err.log'
+
+function Resolve-LogPair {
+    param([Parameter(Mandatory = $true)][string]$BaseStem)
+    for ($version = 0; $version -le 99; $version++) {
+        $stem = if ($version -eq 0) { $BaseStem } else { "$BaseStem-retry-v$version" }
+        $out = Join-Path $reports "$stem.out.log"
+        $err = Join-Path $reports "$stem.err.log"
+        if (-not (Test-Path -LiteralPath $out) -and -not (Test-Path -LiteralPath $err)) {
+            return [pscustomobject]@{ Out = $out; Err = $err }
+        }
+    }
+    throw "No immutable retry log slot remains for $BaseStem"
+}
 
 if (Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue) {
     Wait-Process -Id $WaitForProcessId
@@ -29,9 +40,7 @@ if (-not (Test-Path -LiteralPath $captionInputs)) {
 $startedService = $false
 try {
     if (-not (Test-Path -LiteralPath $captionManifest)) {
-        if ((Test-Path -LiteralPath $captionOut) -or (Test-Path -LiteralPath $captionErr)) {
-            throw 'Refusing to replace caption logs; inspect and resume with new log paths'
-        }
+        $captionLogs = Resolve-LogPair -BaseStem 'mugen-six-action-broad-captions-v1'
         $serviceState = (& ssh -o BatchMode=yes -o ConnectTimeout=8 spark `
             'systemctl --user is-active qwen-122b.service || true').Trim()
         if ($serviceState -ne 'active') {
@@ -87,7 +96,7 @@ try {
             '--workers',
             '1'
         ) -WorkingDirectory $root -WindowStyle Hidden -Wait -PassThru `
-            -RedirectStandardOutput $captionOut -RedirectStandardError $captionErr
+            -RedirectStandardOutput $captionLogs.Out -RedirectStandardError $captionLogs.Err
         if ($caption.ExitCode -ne 0) {
             throw "Spark captioning exited with code $($caption.ExitCode)"
         }
@@ -102,17 +111,18 @@ try {
 if (-not (Test-Path -LiteralPath $captionManifest)) {
     throw 'Spark captioning did not publish a complete manifest'
 }
-foreach ($output in @($broadCaptioned, $denseCaptioned, $stillPlan)) {
-    if (Test-Path -LiteralPath $output) {
-        throw "Refusing to replace captioned corpus artifact: $output"
-    }
+if (-not (Test-Path -LiteralPath $broadCaptioned)) {
+    & $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
+        $broad $broadCaptioned --caption-manifest $captionManifest
+    if ($LASTEXITCODE -ne 0) { throw 'Broad caption join failed' }
 }
-& $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
-    $broad $broadCaptioned --caption-manifest $captionManifest
-if ($LASTEXITCODE -ne 0) { throw 'Broad caption join failed' }
-& $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
-    $dense $denseCaptioned --caption-manifest $captionManifest
-if ($LASTEXITCODE -ne 0) { throw 'Dense caption join failed' }
-& $python (Join-Path $root 'scripts\build_mugen_dense_still_plan_v1.py') `
-    $broadCaptioned $stillPlan
-if ($LASTEXITCODE -ne 0) { throw 'Broad still plan failed' }
+if (-not (Test-Path -LiteralPath $denseCaptioned)) {
+    & $python (Join-Path $root 'scripts\build_mugen_dense_autoencoder_bridge_v1.py') `
+        $dense $denseCaptioned --caption-manifest $captionManifest
+    if ($LASTEXITCODE -ne 0) { throw 'Dense caption join failed' }
+}
+if (-not (Test-Path -LiteralPath $stillPlan)) {
+    & $python (Join-Path $root 'scripts\build_mugen_dense_still_plan_v1.py') `
+        $broadCaptioned $stillPlan
+    if ($LASTEXITCODE -ne 0) { throw 'Broad still plan failed' }
+}
