@@ -597,9 +597,11 @@ semantic-generalization claim follows from this continuation.
 ### Quality-first scratch latent still trainer
 
 `spritelab.latent_still_train` joins the immutable sequence plan, frozen
-2x-RGBA latent cache, and frozen 77x768 CLIP token-state cache. Stage-one sampling
-is one canonical idle-medoid target per identity, so neither action frequency nor
-animation length can dominate appearance learning. The trainer uses a
+2x-RGBA latent cache, and frozen 77x768 CLIP token-state cache. The caption is anchored
+to one canonical idle medoid, while stage-one training samples uniformly across all
+eight verified frames of that identity's idle clip. This expands the 4,062-identity
+corpus to 32,496 eligible appearance targets without allowing action frequency or
+animation length to dominate appearance learning. The trainer uses a
 rectified-flow objective with an explicit 25% pure-noise endpoint mixture,
 10% classifier-free text dropout, BF16 activations, FP32 parameters, EMA, and
 identity-disjoint validation. During learning-rate warmup the EMA is an exact copy
@@ -638,7 +640,7 @@ optimizer and records that policy in both checkpoint and report.
 Endpoint-only training remains a historical in-sample reconstruction diagnostic,
 not the active corpus model. The active default samples uniform flow time with 25%
 explicit endpoint exposure and evaluates a 16-step Heun trajectory. Its
-reference-conditioned model uses 384-wide tokens, 12 blocks, 6 heads, and 4x4 latent
+reference-conditioned model uses 384-wide tokens, 12 blocks, 6 heads, and 2x2 latent
 patches. Both exact training-member probes and identity-held-out probes must report
 the sampling regime and use fixed matched noise; loss improvement alone is not an
 adequate result. The corpus trainer therefore publishes two separate final metric

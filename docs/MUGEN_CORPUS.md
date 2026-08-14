@@ -515,6 +515,21 @@ reported, but none controls main-corpus admission. The broad codec/appearance vi
 likewise retains scale outliers; no source character is deleted. Results must be
 stratified by scale so added coverage cannot masquerade as high-fidelity evidence.
 
+The finalized four-source retained corpus contains 4,450 materialized character
+variants. Of these, 3,936 contain the complete six-slot schema, representing 3,826
+unique complete SFF identities plus 110 additional authored AIR variants that reuse
+an exact SFF. The primary coverage manifest admits 3,759 complete, unclipped variants
+with nonempty frames: 3,442 train, 162 validation, and 155 test identities, with an
+exact 3,759 examples apiece for idle, walk, jump, block, attack A, and attack B
+(22,554 clips total). Its canonical file is
+`data/processed/mugen-six-action-dense-coverage-all-scales-v1.json`, SHA-256
+`28c36935322a21e9469131ed3b396b0263cb7cc6a91a900b2527fcdb76ee7238`;
+the corresponding retiered quality audit SHA-256 is
+`b606a43da57f766c8cdf63a9c7e54c126e33c6fdeccee42a153b2951dcc00ba0`.
+The broader codec/appearance manifest contains 4,062 idle-bearing variants and
+23,808 action clips, with SHA-256
+`8571c369f7610a9981bd838ccd274f6ab360d5aa47d5e40ce9d30e4839cba4d6`.
+
 Dataset splits are transitive components, not independent rows. Exact full-SFF,
 complete action-array, and nonempty-frame hashes are grouped, and conservative DEF
 identity labels are normalized with Unicode NFKC, case folding, and alphanumeric token
@@ -541,14 +556,23 @@ materialization hash and every selected sequence's identity, split, source pixel
 path/hash, latent geometry, and idle-reference frame. Extra broad latent rows are
 counted but ignored, avoiding a second multi-gigabyte cache for the dense subset.
 
-The stage-one still plan is appearance-only. It selects exactly one verified
-premultiplied-RGBA temporal-medoid frame from the idle clip of each identity and uses
-the literal visual caption plus a constant canonical full-body/transparent/side-view
-format prompt. It does not attach walk, jump, block, or attack text and does not treat
-the other seven logical idle frames as extra targets. Those frames remain useful to
-the codec and stage-two reference-motion model. This preserves the intended boundary:
-text describes who to draw; the separate motion DiT receives what that reference
-should do.
+The stage-one still plan is appearance-only. Its literal visual caption is anchored to
+one verified premultiplied-RGBA temporal-medoid idle frame and is combined with a
+constant canonical full-body/transparent/side-view format prompt. Training samples
+uniformly from all eight verified frames of that identity's idle clip, yielding
+32,496 eligible conditioned still targets from the 4,062-identity broad set rather
+than discarding seven-eighths of the neutral appearance data. It does not attach walk,
+jump, block, or attack text to the still generator. This preserves the intended
+boundary: text describes who to draw; the separate motion DiT receives what that
+reference should do.
+
+Caption closure is not a dependency of reference-motion training. The motion DiT
+consumes only the exact idle reference latent, one of the six action tokens, and the
+authored normalized phase row. It can therefore train from the complete coverage
+manifest as soon as the codec latents exist while the independent Spark appearance
+caption pass continues for the text-to-still model. This is a scheduling distinction,
+not a weaker provenance contract: source pixels, latent hashes, identity splits,
+reference frame, action, and phase remain exact and hash-bound.
 
 The earlier MFFA and Anime All Stars schema-v2 materializations are now admitted
 through a strict zero-copy compatibility view rather than being abandoned or copied.
