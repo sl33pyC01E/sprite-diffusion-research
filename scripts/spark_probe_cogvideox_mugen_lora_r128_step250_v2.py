@@ -28,9 +28,18 @@ LORA_WEIGHT_NAME = os.environ.get(
     "SPRITELAB_COGVIDEOX_LORA_WEIGHT_NAME", "pytorch_lora_weights.safetensors"
 )
 TRAINING_STEPS = int(os.environ.get("SPRITELAB_COGVIDEOX_TRAINING_STEPS", "250"))
+TRAINING_DATASET_MANIFEST_SHA256 = os.environ.get(
+    "SPRITELAB_COGVIDEOX_TRAINING_DATASET_MANIFEST_SHA256",
+    "524a387ef02ce3ef42ac711e80f476d992f28e515edec37196822124821658aa",
+)
 LORA_SCALE = float(os.environ.get("SPRITELAB_COGVIDEOX_LORA_SCALE", "1.0"))
 VERB = os.environ.get("SPRITELAB_COGVIDEOX_VERB", "normal_attack")
-TRAIN_LOG = ROOT / "lora-orange-fighter-native-caption-r128-step250-v2.log"
+TRAIN_LOG = Path(
+    os.environ.get(
+        "SPRITELAB_COGVIDEOX_TRAIN_LOG",
+        ROOT / "lora-orange-fighter-native-caption-r128-step250-v2.log",
+    )
+)
 OUTPUT = Path(
     os.environ.get(
         "SPRITELAB_COGVIDEOX_OUTPUT",
@@ -186,6 +195,7 @@ def main() -> None:
                 "lora_path": str(weights_path),
                 "rank": 128,
                 "steps": TRAINING_STEPS,
+                "training_dataset_manifest_sha256": TRAINING_DATASET_MANIFEST_SHA256,
                 "training_log_sha256": file_sha256(TRAIN_LOG),
             },
         }
