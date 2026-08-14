@@ -774,3 +774,48 @@ with loss `0.207`; its adapter SHA-256 is
 This proves only dataset/trainer/memory wiring. The rank-128 quality gate must still
 demonstrate visible identity preservation and verb-specific motion before any
 broad MUGEN fine-tune is authorized.
+
+The RGB supervision captions were then corrected from the impossible cue
+`transparent background` to the observed `plain neutral gray background`. The
+ten-action caption-corrected manifest SHA-256 is
+`524a387ef02ce3ef42ac711e80f476d992f28e515edec37196822124821658aa`.
+A rank-128 LoRA trained for 250 steps produces a recognizable fighter and coherent
+motion, but the matched attack/block audit rejects reliable steering: generated
+separation is only `0.311415` of target separation, the block output prefers block,
+and the attack output is incorrectly closer to the block target. The adapter
+SHA-256 is `449126fe07b8dc06ff24db6471f10044a9d4ebfd878ff59e05984c909e1cddc9`.
+The attack and block report SHA-256 values are
+`d67232d9733471a24d01e882e6889e618210a56910f23100c3b17ba78d83dafc`
+and `1368f575744b06400a23d8463724c162dfe364331723124290a4d4ef1d5c9c46`.
+
+The frozen CogVideoX VAE is not the principal quality blocker. Its deterministic
+mode reconstruction of the exact nine-frame attack has center-crop RGB MAE
+`0.0118134`, retains the complete pose sequence, and only slightly softens edges
+and colors. Its audit SHA-256 is
+`5ba9b27849648a65411c3288f4ca2573afce4812545ab3f9d6235333d2f2aa8f`.
+This supports keeping a latent video architecture while improving denoiser
+supervision and sampling balance.
+
+The causal follow-up restricts training to `block` and `normal_attack` while
+retaining identical pixels, captions, rank, optimizer, and 250-step budget. Its
+two-row manifest SHA-256 is
+`ff43db0badbf5b53c6eade31d8d943973947fa3be8627bdfd11ca5487d0777b6`,
+and the final adapter SHA-256 is
+`c6f2ac588188b3dff9eb63aff0a4e7dbb1ad3fde6bfe5c17fbf603d3055b8950`.
+Under the same reference, seed, prompt template, and 50-step sampler, generated
+attack/block separation reaches `1.105768` of authored target separation. Both
+directions prefer the correct target: attack error `0.0530473` versus `0.0729526`
+to block, and block error `0.0480488` versus `0.0729170` to attack. The attack and
+block inference report SHA-256 values are
+`fa6f4d8d5ac86f5848a340a36694d7c89b1040e08868643d6baa370f679edfca`
+and `b4dd50532226c98ea05a3afb7b90cdf45e769e549e1e5c9cee74a8a183005bae`.
+The canonical paired audit SHA-256 is
+`f1f0fa2149692b95054c28a6319d13040b181a1fcc01d114a745fe1a6dcbe288`.
+
+This passes the easiest action-capacity gate and makes pretrained latent I2V a
+tractable motion-stage architecture. It does not pass sprite-fidelity or held-out
+identity generalization: outputs remain softened, show background residue, and
+only cover one fighter and two in-sample verbs. The next broad run must use
+identity-disjoint validation and an action-balanced sampler so common verbs do not
+dominate token learning. It should not merely concatenate every MUGEN clip and
+train in source-frequency order.
