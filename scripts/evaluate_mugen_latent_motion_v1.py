@@ -13,12 +13,18 @@ sys.path.insert(0, str(ROOT / "src"))
 from spritelab.latent_motion_train import evaluate_latent_motion_checkpoint  # noqa: E402
 from spritelab.storage import DiskGuard  # noqa: E402
 
-MANIFEST = ROOT / "data/processed/mugen-mffa-reference-primary-motion-canonical-v2.json"
+LEGACY_MANIFEST = ROOT / "data/processed/mugen-mffa-reference-primary-motion-canonical-v2.json"
 
 
-def main(*, checkpoint: str, expected_sha256: str, output_name: str) -> None:
+def main(
+    *,
+    checkpoint: str,
+    expected_sha256: str,
+    output_name: str,
+    manifest: Path = LEGACY_MANIFEST,
+) -> None:
     result = evaluate_latent_motion_checkpoint(
-        MANIFEST,
+        manifest,
         checkpoint,
         ROOT / "data/inference" / output_name,
         expected_checkpoint_sha256=expected_sha256,
@@ -37,9 +43,11 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--output-name", required=True)
+    parser.add_argument("--manifest", type=Path, default=LEGACY_MANIFEST)
     args = parser.parse_args()
     main(
         checkpoint=args.checkpoint,
         expected_sha256=args.expected_sha256,
         output_name=args.output_name,
+        manifest=args.manifest,
     )
