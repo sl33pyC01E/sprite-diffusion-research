@@ -138,6 +138,9 @@ def build_mugen_dense_manifest(
             slot_counts[slot] += 1
         idle = by_slot["idle"]
         idle_quality = next(row for row in audit["clip_metrics"] if row.get("slot") == "idle")
+        reference_frame_index = int(idle_quality["medoid_frame_index"])
+        if not 0 <= reference_frame_index < 8:
+            raise ValueError(f"idle medoid index is invalid: {variant_id}")
         source = _object(character.get("source"), "character source")
         sff = _object(source.get("sff"), "character source SFF")
         records.append(
@@ -158,8 +161,9 @@ def build_mugen_dense_manifest(
                 },
                 "reference": {
                     "array": _object(idle.get("array"), "idle array"),
-                    "frame_index": 0,
-                    "frame_array_content_sha256": idle_quality["frame_array_content_sha256"][0],
+                    "frame_index": reference_frame_index,
+                    "frame_array_content_sha256": idle_quality["medoid_frame_array_content_sha256"],
+                    "selection_method": "premultiplied_rgba_temporal_medoid_v1",
                     "slot": "idle",
                 },
                 "sff_sha256": _text(sff, "sha256"),

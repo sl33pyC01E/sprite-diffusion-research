@@ -182,6 +182,7 @@ def _audit_character(
         frame_visible_pixels = [int(np.count_nonzero(frame)) for frame in alpha]
         unique_frames = len({frame.tobytes(order="C") for frame in value})
         frame_hashes = [_array_sha256(frame) for frame in value]
+        medoid_frame_index = _medoid_frame_index(value)
         clip_rows.append(
             {
                 "action_number": int(clip["action_number"]),
@@ -192,6 +193,8 @@ def _audit_character(
                 "frame_visible_pixels": frame_visible_pixels,
                 "loop_mode": _text(clip, "loop_mode"),
                 "mean_visible_fraction": visible / (8 * 128 * 128),
+                "medoid_frame_array_content_sha256": frame_hashes[medoid_frame_index],
+                "medoid_frame_index": medoid_frame_index,
                 "slot": slot,
                 "source_frame_count": int(
                     _object(clip.get("temporal_selection"), "temporal selection")[
@@ -270,6 +273,16 @@ def _distribution(values: list[float]) -> dict[str, float | int | None]:
         "minimum": ordered[0],
         "p10": percentile(1, 10),
     }
+
+
+def _medoid_frame_index(value: np.ndarray) -> int:
+    rgba = value.astype(np.int64)
+    alpha = rgba[..., 3:4]
+    premultiplied = np.concatenate((rgba[..., :3] * alpha, alpha * 255), axis=-1)
+    scores = []
+    for index in range(value.shape[0]):
+        scores.append(int(np.abs(premultiplied[index : index + 1] - premultiplied).sum()))
+    return min(range(len(scores)), key=lambda index: (scores[index], index))
 
 
 def _safe_relative(value: str) -> PurePosixPath:

@@ -101,7 +101,9 @@ def test_dense_manifest_keeps_exact_array_duplicates_in_one_split(tmp_path: Path
     assert manifest["counts"]["characters"] == 2
     assert manifest["counts"]["components"] == 1
     assert len({row["split"] for row in manifest["records"]}) == 1
-    assert manifest["records"][0]["reference"]["frame_index"] == 0
+    assert manifest["records"][0]["reference"]["selection_method"] == (
+        "premultiplied_rgba_temporal_medoid_v1"
+    )
     assert len(manifest["records"][0]["reference"]["frame_array_content_sha256"]) == 64
     train_probe = manifest["evaluation_probes"][manifest["records"][0]["split"]]
     assert {row["variant_id"] for row in train_probe} == {"variant-a", "variant-b"}

@@ -68,6 +68,9 @@ def test_quality_audit_verifies_arrays_and_builds_dense_tier(tmp_path: Path) -> 
     assert audit["counts"]["dense_eligible_characters"] == 1
     assert audit["quality_rows"][0]["dynamic_slots"] == 6
     assert audit["quality_rows"][0]["distinct_slot_arrays"] == 6
+    idle = next(row for row in audit["quality_rows"][0]["clip_metrics"] if row["slot"] == "idle")
+    assert idle["medoid_frame_index"] == 0
+    assert idle["medoid_frame_array_content_sha256"] == idle["frame_array_content_sha256"][0]
 
 
 def test_quality_audit_retains_broad_character_with_explicit_dense_reason(
