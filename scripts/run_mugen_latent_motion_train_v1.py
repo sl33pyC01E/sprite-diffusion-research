@@ -17,11 +17,22 @@ from spritelab.latent_motion_train import (  # noqa: E402
     load_latent_motion_training_corpus,
     run_latent_motion_training,
 )
+from spritelab.models.latent_motion_dit import LatentMotionDiTConfig  # noqa: E402
 from spritelab.storage import DiskGuard  # noqa: E402
 
 MANIFEST = ROOT / "data/processed/mugen-mffa-reference-primary-motion-canonical-v2.json"
 ENDPOINT_EMA = ROOT / "data/experiments/mugen-primary-motion-broad-v2-step15000/checkpoint-ema.pt"
 ENDPOINT_EMA_SHA256 = "7235e6cba9d891fff5cae7b564457c99db6fadfbf1d4e10a7fa4a4f3b0198027"
+LEGACY_ENDPOINT_MODEL = LatentMotionDiTConfig(
+    latent_size=64,
+    num_frames=8,
+    latent_channels=8,
+    patch_size=4,
+    model_dim=256,
+    depth=8,
+    num_heads=8,
+    condition_dim=256,
+)
 
 
 def main(*, profile: str, preflight_only: bool) -> None:
@@ -35,6 +46,11 @@ def main(*, profile: str, preflight_only: bool) -> None:
             checkpoint_every=1,
             validation_pairs=1,
             preview_pairs=1,
+            model=LEGACY_ENDPOINT_MODEL,
+            time_sampling="endpoint",
+            endpoint_sample_probability=0.0,
+            inference_steps=1,
+            sampler_algorithm="euler",
         )
         output_name = "mugen-primary-motion-broad-gpu-smoke-v1-step1"
     elif profile == "pilot250":
@@ -45,10 +61,22 @@ def main(*, profile: str, preflight_only: bool) -> None:
             checkpoint_every=250,
             validation_pairs=4,
             preview_pairs=2,
+            time_sampling="endpoint",
+            endpoint_sample_probability=0.0,
+            inference_steps=1,
+            sampler_algorithm="euler",
+            model=LEGACY_ENDPOINT_MODEL,
         )
         output_name = "mugen-primary-motion-broad-pilot-v1-step250"
     elif profile == "baseline15000":
-        config = LatentMotionTrainingConfig()
+        config = LatentMotionTrainingConfig(
+            time_sampling="endpoint",
+            endpoint_sample_probability=0.0,
+            inference_steps=1,
+            sampler_algorithm="euler",
+            steps=15_000,
+            model=LEGACY_ENDPOINT_MODEL,
+        )
         output_name = "mugen-primary-motion-broad-v2-step15000"
         warm_start = False
     elif profile == "flow-smoke":
@@ -67,6 +95,7 @@ def main(*, profile: str, preflight_only: bool) -> None:
             checkpoint_every=1,
             validation_pairs=1,
             preview_pairs=1,
+            model=LEGACY_ENDPOINT_MODEL,
         )
         output_name = "mugen-primary-motion-broad-flow-warmstart-smoke-v1-step1"
         warm_start = True
@@ -82,6 +111,7 @@ def main(*, profile: str, preflight_only: bool) -> None:
             steps=8_000,
             validation_pairs=8,
             preview_pairs=4,
+            model=LEGACY_ENDPOINT_MODEL,
         )
         output_name = "mugen-primary-motion-broad-flow-warmstart-v1-step8000"
         warm_start = True

@@ -77,7 +77,7 @@ def test_config_requires_a_denoising_objective() -> None:
 
 def test_flow_config_requires_a_multistep_sampler() -> None:
     with pytest.raises(ValueError, match="at least two inference steps"):
-        LatentMotionTrainingConfig(time_sampling="uniform")
+        LatentMotionTrainingConfig(time_sampling="uniform", inference_steps=1)
 
     config = LatentMotionTrainingConfig(
         time_sampling="uniform",
@@ -87,6 +87,17 @@ def test_flow_config_requires_a_multistep_sampler() -> None:
     )
 
     assert config.inference_steps == 8
+
+
+def test_default_is_corpus_scale_mixed_flow_not_endpoint_memorization() -> None:
+    config = LatentMotionTrainingConfig()
+
+    assert config.time_sampling == "uniform"
+    assert config.endpoint_sample_probability == pytest.approx(0.25)
+    assert config.inference_steps == 16
+    assert config.sampler_algorithm == "heun"
+    assert config.model.model_dim == 384
+    assert config.model.depth == 12
 
 
 def test_training_times_are_shared_across_a_matched_pair() -> None:

@@ -578,20 +578,18 @@ semantic-generalization claim follows from this continuation.
 ### Quality-first scratch latent still trainer
 
 `spritelab.latent_still_train` joins the immutable sequence plan, frozen
-2x-RGBA latent cache, and frozen 77x768 CLIP token-state cache.  Sampling is
-hierarchical (identity, structured verb, sequence, frame), so a prolific
-fighter or animation cannot dominate by raw frame count.  The trainer uses a
-single rectified-flow pass with an explicit 25% pure-noise endpoint mixture,
+2x-RGBA latent cache, and frozen 77x768 CLIP token-state cache. Stage-one sampling
+is one canonical idle-medoid target per identity, so neither action frequency nor
+animation length can dominate appearance learning. The trainer uses a
+rectified-flow objective with an explicit 25% pure-noise endpoint mixture,
 10% classifier-free text dropout, BF16 activations, FP32 parameters, EMA, and
 identity-disjoint validation.  Periodic safe-loadable checkpoints retain the
 optimizer and all sampler/flow/dropout RNG states for power-loss continuation.
 
-The matched pretrained control uses the exact pinned Stable Diffusion 1.4 UNet
-and changes only rank-16 attention LoRA adapters.  It is trained with the same
-identity/verb/sequence/frame sampler and frozen CLIP states, but against
-deterministic SD VAE RGB latents under the original 1,000-step epsilon-noise
-schedule.  Because its fixed gray alpha composite discards transparency, this
-branch is a subject/detail quality control, never the canonical RGBA output.
+Earlier Stable Diffusion adapter experiments are historical evidence only. They are
+not an active control, are not part of the training sequence, and must not trigger
+model acquisition. The current still generator is the compact project-owned RGBA
+latent DiT trained from scratch.
 
 ### Reference-conditioned latent motion endpoint refinement
 
@@ -602,9 +600,9 @@ patch encoders meet inside factorized spatial/temporal attention. The prediction
 a motion residual relative to the reference latent, so unchanged appearance does
 not need to be regenerated from scratch.
 
-The bounded quality runner exposes three independently weighted objectives:
-random-time rectified flow, matched `t=1` endpoint velocity, and differentiable
-decoded-pixel reconstruction. The last objective passes the predicted latent
+The quality runner exposes latent velocity and differentiable decoded-pixel
+reconstruction objectives at the sampled noise time. The latter passes the clean
+latent estimate
 through a frozen, hash-pinned RGBA decoder and applies the existing transparent
 sprite reconstruction loss; decoder weights never enter the optimizer. A parent
 checkpoint may initialize a refinement only when its SHA-256, plan, identity,
@@ -612,20 +610,19 @@ ordered verbs, normalization, and architecture all match exactly. Current
 refinement restores model/conditioner weights but deliberately starts a fresh
 optimizer and records that policy in both checkpoint and report.
 
-Endpoint-only training is an evidence-backed quality mode for direct one-step
-animation reconstruction, not a substitute for a broad generative distribution.
-Random-time flow remains available for future multi-step sampling experiments, but
-the MUGEN six-action ablation found that it competed with the explicitly evaluated
-endpoint. Scaling must therefore report both sample quality and the intended
-sampling regime rather than assuming a flow loss is beneficial by definition.
-## Pretrained latent still-image branch
+Endpoint-only training remains a historical in-sample reconstruction diagnostic,
+not the active corpus model. The active default samples uniform flow time with 25%
+explicit endpoint exposure and evaluates a 16-step Heun trajectory. Its
+reference-conditioned model uses 384-wide tokens, 12 blocks, 6 heads, and 4x4 latent
+patches. Both exact training-member probes and identity-held-out probes must report
+the sampling regime and use fixed matched noise; loss improvement alone is not an
+acceptance result.
 
-The quality path now treats canonical appearance generation and motion generation
-as separate conditional problems.  A first-stage pretrained latent image model
-maps a detailed appearance caption to one neutral canonical sprite still.  The
-second-stage pretrained latent image-to-video model receives that still plus an
-action verb.  Direct-pixel DiT runs remain useful controls and memorization
-diagnostics, but are not the primary quality architecture.
+## Historical pretrained branch (superseded; do not reacquire)
+
+This branch records an abandoned experiment from before the dense corpus existed.
+It used pretrained image/video models to test whether the task signal was present;
+it is not the primary quality architecture and is not authorized for rerun.
 
 The first Qwen-Image LoRA dataset is exported from the canonical MUGEN still plan
 as a Hugging Face ImageFolder.  It contains exactly one training still per train
@@ -637,19 +634,20 @@ describe the neutral-gray preview canvas; they do not pretend the RGB trainer
 natively produces alpha.  Background removal is a separately evaluated decode
 step, never a silent mutation of the training target.
 
-The intended LoRA control uses the official Diffusers Qwen-Image trainer with
+The historical LoRA control used the official Diffusers Qwen-Image trainer with
 per-image captions, bf16, cached VAE latents, gradient checkpointing, 8-bit Adam,
 and no checkpoint retention limit.  Zero-shot held-out prompts run first.  A LoRA
 run is accepted only if it improves the fixed validation identities under matched
 seeds without merely copying the gray canvas or collapsing distinct captions.
 
-The base-model acquisition is pinned to `Qwen/Qwen-Image` commit
+The removed base-model acquisition was pinned to `Qwen/Qwen-Image` commit
 `75e0b4be04f60ec59a75f475837eced720f823b6` (57,704,594,653 bytes,
 Apache-2.0 metadata).  The Spark downloader verifies the immutable revision and
 provider file sizes before any transfer, enforces the 100-GiB free-space floor,
 resumes through the Hugging Face local cache, verifies every LFS SHA-256, retains
-partials after interruption, and publishes a no-clobber exact-file manifest only
-after the whole snapshot verifies.
+partials after interruption, and published a no-clobber exact-file manifest only
+after the whole snapshot verified. This is provenance for the old experiment, not
+an instruction to download it again.
 
 ## Current architecture decision: compact latent sprite models from scratch
 

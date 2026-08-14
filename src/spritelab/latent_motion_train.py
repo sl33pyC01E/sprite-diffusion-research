@@ -64,11 +64,11 @@ class LatentMotionTrainingConfig:
     ema_decay: float = 0.9995
     latent_endpoint_weight: float = 1.0
     pixel_endpoint_weight: float = 1.0
-    time_sampling: TimeSampling = "endpoint"
-    endpoint_sample_probability: float = 0.0
-    inference_steps: int = 1
-    sampler_algorithm: FlowSampler = "euler"
-    steps: int = 15_000
+    time_sampling: TimeSampling = "uniform"
+    endpoint_sample_probability: float = 0.25
+    inference_steps: int = 16
+    sampler_algorithm: FlowSampler = "heun"
+    steps: int = 50_000
     log_every: int = 25
     validate_every: int = 500
     checkpoint_every: int = 1_000
@@ -82,10 +82,10 @@ class LatentMotionTrainingConfig:
         num_frames=8,
         latent_channels=8,
         patch_size=4,
-        model_dim=256,
-        depth=8,
-        num_heads=8,
-        condition_dim=256,
+        model_dim=384,
+        depth=12,
+        num_heads=6,
+        condition_dim=384,
     )
 
     def __post_init__(self) -> None:
