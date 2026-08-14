@@ -47,22 +47,24 @@ def _fixture(tmp_path: Path) -> Path:
     return path
 
 
-def test_dense_still_plan_uses_one_appearance_only_reference(tmp_path: Path) -> None:
+def test_dense_still_plan_uses_all_idle_frames_for_one_appearance_clip(tmp_path: Path) -> None:
     materialization = _fixture(tmp_path)
 
     plan = build_mugen_dense_still_training_plan(materialization)
 
     assert plan["counts"]["canonical_references"] == 1
     assert plan["counts"]["source_action_sequences"] == 6
-    assert plan["schema_version"] == 4
+    assert plan["schema_version"] == 5
+    assert plan["counts"]["eligible_training_frames"] == 8
     reference = plan["records"][0]
     assert reference["conditioning"]["verb"] == "canonical_reference"
     assert reference["prompt"].endswith("neutral side-view reference")
     assert "attack" not in reference["prompt"]
     assert "walking" not in reference["prompt"]
-    assert reference["target"]["eligible_frame_indices"] == [2]
+    assert reference["target"]["eligible_frame_indices"] == list(range(8))
     assert reference["target"]["reference_frame_array_content_sha256"] == "f" * 64
     assert plan["sampler_contract"]["motion_or_action_text_in_prompt"] is False
+    assert plan["sampler_contract"]["caption_reference"] == ("fixed_verified_idle_temporal_medoid")
 
 
 def test_dense_still_plan_export_is_no_clobber(tmp_path: Path) -> None:
