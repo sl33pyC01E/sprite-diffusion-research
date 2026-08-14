@@ -87,16 +87,21 @@ respectively. The 2x representation therefore doubles latent area but materially
 improves one-pixel reconstruction and is the active quality contract; the 4x codec
 remains a compute ablation.
 
-The still-image experiment has two matched branches. The primary research branch is
-a compact latent DiT trained from scratch over the custom RGBA codec, with a frozen
-pretrained text encoder. A quality-control branch adapts Stable Diffusion v1 with
-LoRA on the identical canonical stills, detailed captions, and identity-disjoint
-splits. Stable Diffusion v1 is practical because its official architecture uses an
-8x autoencoder, an 860M-parameter U-Net, and CLIP ViT-L/14; the pretrained branch is
-RGB, so it must use a separately declared background/mask contract and cannot be
-silently treated as native RGBA. PixArt's official 0.6B 256px DiT is a later
-architecturally aligned control. Sana is not the first sprite control because its
-official 32x compression is hostile to one-pixel fidelity.
+The active still-image experiment has one primary branch: a compact latent DiT
+trained from scratch over the custom RGBA codec, with a frozen text encoder used
+only to turn captions into conditioning vectors. No LoRA branch is authorized or
+planned. The from-scratch image and reference-motion models must first be evaluated
+at the scale of the dense MUGEN corpus, including both in-distribution probes and
+identity-disjoint validation.
+
+Only if those corpus-scale models fail to reach useful quality should a pretrained
+fallback be considered. That fallback would be a full fine-tune of an image model
+and an image-to-video model, used to create a much larger synthetic teaching corpus,
+followed by distillation back into the small project-owned sprite DiTs. It is a
+backburner contingency rather than the active training path, and it must not trigger
+unapproved model downloads or remote-machine changes. Generic natural-image VAEs
+with 8x or 32x spatial compression are also not interchangeable with the active 2x
+RGBA sprite codec because they can erase one-pixel edges and transparency structure.
 
 Canonical MUGEN appearance text is produced by a pinned, user-hosted
 `RedHatAI/Qwen3.5-122B-A10B-NVFP4` vision model at revision
