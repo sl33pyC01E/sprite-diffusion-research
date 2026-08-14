@@ -24,6 +24,7 @@ def main() -> None:
         repo_id=MODEL_ID,
         revision=REVISION,
         local_dir=OUTPUT,
+        max_workers=4,
     )
     records = []
     for path in sorted(

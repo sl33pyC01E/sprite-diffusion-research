@@ -700,3 +700,44 @@ structure than the small DiT, but prompting alone cannot map MUGEN action semant
 into that motion prior. The next experiment must freeze the sprite renderer and
 fine-tune temporal motion capacity on the canonical MUGEN clips while presenting
 the exact reference control and action-conditioned text during training.
+
+### SparseCtrl temporal adaptation result
+
+The canonical MUGEN motion corpus was projected into the sprite prior's frozen
+SD1.4 VAE for all 1,443 sequences. The target-latent manifest SHA-256 is
+`d0f0188aef09ab3ace2e8ee3299b8dc2fc5d488a192c28942f40da3961df2299`.
+Action-aware appearance prompts were encoded without truncation for the same
+corpus; the text-cache manifest SHA-256 is
+`9fd9b6169e8d47c870b857e3d58db54aa749ee728bc632718f73a2731dbab29d`.
+
+A ten-action high-contrast training fighter was used as a deliberate easiest-case
+overfit gate. A rank-16 LoRA on temporal self- and cross-attention trained for
+1,000 steps. Its checkpoint SHA-256 is
+`ad4ab2e722149fac79922d38e40b7ec3137999bd137efb6b247f7ed6a6fbb36a`
+and report SHA-256 is
+`a5b809e508fe204dfa4bbb130c1e389e2719c70b2aaa058afe493f5c21254e5b`.
+EMA inference retains tiled noise after the controlled first frame: RGB MAE
+`0.243726`, generated/target action-separation ratio `0.159977`, and own-target
+nearest `1/10`. The evaluation SHA-256 is
+`e39527e389d0f2a4cfce8cf6beae7f48e3d9608f284101f599ca31b63f756adf`.
+Raw weights reduce RGB MAE to `0.0910424` but collapse every verb to nearly the
+same foggy clip: separation ratio `0.0426215` and own-target nearest `1/10`. Its
+evaluation SHA-256 is
+`483fab9d41f68be529acb177a388be14cd619e8a0c1aec8855aeb448f26e86f2`.
+
+The capacity test then trained all 417 million pretrained motion-module parameters
+in bfloat16 for 500 steps while retaining the frozen MUGEN still renderer and
+SparseCtrl. The checkpoint SHA-256 is
+`bb25fa559853f2cdc5833c09dc620d18838717adf34c1cb9472846dc2bb51cc4`
+and report SHA-256 is
+`e2dcf6974d34430d8a765653f80f5b364b6edd7a5ac656809f94b22fb3bd1129`.
+Raw inference still expands the first-frame subject into tiled sprite fragments:
+RGB MAE `0.249636`, separation ratio `0.194467`, and own-target nearest `1/10`.
+The evaluation SHA-256 is
+`45911004a151a4357dd2d8fe462dead0cc4f86b892e2b26c45ccc882ee3b50fc`.
+
+These experiments reject AnimateDiff plus SparseCtrl on the sprite-sheet-biased
+SD renderer as the next quality path. Both the low-rank and full-motion versions
+fail an in-sample, one-identity gate, so longer broad training is not authorized.
+The next pretrained probe uses a native text-plus-image-to-video transformer rather
+than trying to turn a text-to-video/sparse-control stack into one.
