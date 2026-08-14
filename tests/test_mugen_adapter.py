@@ -206,6 +206,34 @@ def test_sff_v1_recovery_skips_invalid_self_link_with_exact_evidence() -> None:
     assert "unavailable index 1" in exclusions[0].detail
 
 
+def test_sff_v1_recovery_uses_exact_record_boundary_for_inflated_data_size() -> None:
+    image = Image.new("P", (1, 1))
+    image.putpalette(bytes(768))
+    image.putdata((0,))
+    pcx = io.BytesIO()
+    image.save(pcx, format="PCX")
+    header = bytearray(512)
+    header[:12] = b"ElecbyteSpr\x00"
+    header[12:16] = bytes((0, 1, 0, 1))
+    struct.pack_into("<4I", header, 16, 1, 2, 512, 32)
+    first_next = 512 + 32 + len(pcx.getvalue())
+    first = struct.pack("<IIhhhhHB13x", first_next, len(pcx.getvalue()), 0, 0, 0, 0, 0, 0)
+    inflated = struct.pack("<IIhhhhHB13x", 0, len(pcx.getvalue()) + 768, 0, 0, 0, 1, 0, 0)
+    payload = bytes(header) + first + pcx.getvalue() + inflated + pcx.getvalue()
+    exclusions = []
+
+    with pytest.raises(ValueError, match="invalid derived subheader size"):
+        decode_sff_v1(payload)
+
+    sprites = decode_sff_v1(payload, recover_invalid_sprites=True, exclusions=exclusions)
+
+    assert len(sprites) == 2
+    assert sprites[1].rgba_sha256 == sprites[0].rgba_sha256
+    assert exclusions[0].archive_index == 1
+    assert exclusions[0].reason == "invalid_declared_data_size_recovered"
+    assert "declared" in exclusions[0].detail
+
+
 def test_sff_v2_decodes_palette_raw_and_rle8() -> None:
     palette = bytearray(1024)
     palette[4:8] = bytes((10, 20, 30, 255))

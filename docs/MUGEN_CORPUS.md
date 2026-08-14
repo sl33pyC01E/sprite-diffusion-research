@@ -407,7 +407,10 @@ recovery skips 24 malformed element rows across 17 files without guessing values
 all 2,332 AIR files then parse. The DEF-to-AIR-to-archive-SFF join resolves 2,310
 fighter variants, of which 2,202 provide the complete six-slot core. Resolved
 variant coverage is idle 2,300, walk 2,277, jump 2,267, block 2,263, normal attack
-2,258, special attack 2,087, and super attack 1,814.
+2,258, special attack 2,087, and super attack 1,814. The compact authoritative AIR
+catalog is
+`data/index/reports/mugen-iidx-jus-chibi-air-schema-catalog-v1.json`, SHA-256
+`4b4b9532dbf4df38d55210659fe7748ffa51503204c353aa031373dfb2defdab`.
 
 The downloaded Anime Ascension file is exact size 98,894,887,513 bytes and SHA-256
 `d3aa7e4ba16e7983851850ae1bb6d01f09eeeb8d19b05e793f31697c9ae3d142`.
@@ -426,10 +429,44 @@ files parse after evidence-retaining omission of 257 malformed rows across 41
 files. The DEF-to-AIR-to-SFF join resolves 3,456 fighter variants, including 3,275
 complete six-slot variants. Resolved coverage is idle 3,446, walk 3,408, jump
 3,393, block 3,387, normal attack 3,353, special attack 3,182, and super attack
-2,798. Combined with JUS/Chibi and Anime All Stars, the current pre-deduplication
+2,798. Its compact authoritative AIR catalog is
+`data/index/reports/mugen-anime-ascension-air-schema-catalog-v1.json`, SHA-256
+`5602a57b867b74324e2908fd19fcc316c2d73dfc0c8dbab58e69e1c51c7e7938`.
+Combined with JUS/Chibi and Anime All Stars, the current pre-deduplication
 pool is 5,886 resolved variants and 5,596 complete six-slot variants. No CMD/CNS/ST
 or executable content is run. Large SFFs remain in their source archives and will
 be streamed one member at a time; unreadable members are quarantined individually.
+
+The original Ascension download also contains an exact 27,158,350,425-byte zero
+tail beginning at byte 71,736,537,088. That verified range is marked sparse on
+NTFS: the logical file remains 98,894,887,513 bytes and its full SHA-256 remains
+`d3aa7e4ba16e7983851850ae1bb6d01f09eeeb8d19b05e793f31697c9ae3d142`,
+while about 25.3 GiB of physical storage is reclaimed. The separate operation
+record is
+`data/index/reports/mugen-anime-ascension-original-sparse-trim-v1.json`, SHA-256
+`f7ee3196baad17bcfd20796a113d67631966003e747caf357702abf313800dc7`.
+
+Acquisition trimming is content-aware. The two large catalogs share 1,476 exact
+AIR-SHA plus SFF-size/CRC candidate pairs; full streamed SFF SHA-256 is still
+required before a pair is treated as an exact duplicate. A duplicate keeps both
+source occurrences and their DEF identity/author evidence but writes only one
+tensor set. Same-SFF variants with different AIR definitions remain distinct.
+The fixed core worker emits at most six `8x128x128xRGBA` clips per admitted
+variant (idle, walk, jump, block, and two pixel-distinct normal attacks), streams
+one SFF into one isolated subprocess, and enforces the 100 GiB free-space floor.
+This is a bounded training view; the complete AIR catalogs retain every special,
+super, and phase action for later views.
+
+Projection v1 is superseded and training-ineligible. It fitted the shared spatial
+view without the two attack tracks and therefore clipped visible attack pixels in
+560 of the first 2,001 attack clips inspected (243 `attack_a`, 317 `attack_b`).
+Projection v2 fits one world-origin transform over every admitted core action and
+rejects any nonzero visible-pixel clipping. It also prefers the standard guard-hold
+action 130 over guard-start action 120 when both are available. The first 25 v2
+occurrences produced 24 materialized characters, 19 complete six-slot characters,
+135 hash-verified arrays, and zero clipped clips; extreme shared-view scales are
+retained for broad coverage and will be separated by explicit quality tiers rather
+than silently cropped or discarded.
 
 Rights and authorship remain evidence, not inference. Each archive URL, archive hash,
 member path, DEF author/name claim, AIR hash, SFF hash, action number, timing row, and

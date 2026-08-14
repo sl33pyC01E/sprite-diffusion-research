@@ -591,16 +591,38 @@ def decode_sff_v1(
         )
         record_end = next_offset if next_offset not in {0, len(payload)} else len(payload)
         actual_subheader_bytes = record_end - offset - data_bytes
+        actual_data_bytes = data_bytes
         # Several real legacy writers incorrectly place 512 in the declared
         # subheader-size field while still emitting the standard 32-byte record.
         # Deriving it from the linked-list boundary is exact and fail-closed.
         if actual_subheader_bytes < 32 or actual_subheader_bytes > subheader_bytes:
-            raise ValueError(
-                f"SFF v1 sprite {archive_index} has invalid derived subheader size "
-                f"{actual_subheader_bytes}"
-            )
+            recovery_end = offset + subheader_bytes
+            if (
+                not recover_invalid_sprites
+                or record_end > len(payload)
+                or recovery_end > record_end
+            ):
+                raise ValueError(
+                    f"SFF v1 sprite {archive_index} has invalid derived subheader size "
+                    f"{actual_subheader_bytes}"
+                )
+            actual_subheader_bytes = subheader_bytes
+            actual_data_bytes = record_end - recovery_end
+            if exclusions is not None:
+                exclusions.append(
+                    MugenSffV1DecodeExclusion(
+                        archive_index=archive_index,
+                        group_number=group,
+                        image_number=image,
+                        reason="invalid_declared_data_size_recovered",
+                        detail=(
+                            f"declared {data_bytes} bytes; exact record boundary contains "
+                            f"{actual_data_bytes} bytes after the {subheader_bytes}-byte header"
+                        ),
+                    )
+                )
         data_start = offset + actual_subheader_bytes
-        data_end = data_start + data_bytes
+        data_end = data_start + actual_data_bytes
         if data_end > len(payload):
             raise ValueError(f"SFF v1 sprite {archive_index} data is out of bounds")
 

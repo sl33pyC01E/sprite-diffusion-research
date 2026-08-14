@@ -50,7 +50,7 @@ def test_six_slot_view_prefers_standard_standing_actions() -> None:
     assert canonical_six_slot_action_numbers(coverage) == {
         "attack_a": 210,
         "attack_b": 201,
-        "block": 120,
+        "block": 130,
         "idle": 0,
         "jump": 42,
         "walk": 20,

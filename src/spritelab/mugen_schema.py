@@ -119,7 +119,7 @@ def canonical_available_slot_action_numbers(
     if coverage.block_action_numbers:
         output["block"] = _first_present(
             coverage.block_action_numbers,
-            (120, 130, 140, 121, 131, 141, 122, 132, 142, 150, 151, 152),
+            (130, 120, 140, 131, 121, 141, 132, 122, 142, 150, 151, 152),
         )
     attacks = ordered_attack_action_numbers(coverage.attack_action_numbers)
     if attacks:
