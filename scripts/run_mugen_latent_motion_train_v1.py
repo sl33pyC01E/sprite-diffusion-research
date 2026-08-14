@@ -122,7 +122,7 @@ def main(
         output_name = "mugen-primary-motion-broad-flow-warmstart-v1-step8000"
         warm_start = True
     elif profile == "corpus50000":
-        config = LatentMotionTrainingConfig()
+        config = LatentMotionTrainingConfig(checkpoint_every=10_000)
         output_name = "mugen-six-action-dense-latent-motion-scratch-v1-step50000"
         warm_start = False
     else:

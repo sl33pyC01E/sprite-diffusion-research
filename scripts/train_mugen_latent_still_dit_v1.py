@@ -44,7 +44,7 @@ def main() -> None:
     if args.profile == "legacy30000":
         config = LatentStillTrainingConfig()
     elif args.profile == "corpus50000":
-        config = LatentStillTrainingConfig(steps=50_000)
+        config = LatentStillTrainingConfig(steps=50_000, checkpoint_every=10_000)
     else:
         config = LatentStillTrainingConfig(
             batch_size=1,
