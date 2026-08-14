@@ -47,6 +47,7 @@ def main() -> None:
         MANIFEST,
         target_size=config.architecture.image_size,
         target_frames=8,
+        usage="autoencoder",
     )
     preflight = {
         "architecture": {

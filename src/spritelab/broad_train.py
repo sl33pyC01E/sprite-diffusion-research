@@ -245,6 +245,7 @@ def prepare_broad_corpus(
     *,
     target_size: int,
     target_frames: int,
+    usage: Literal["conditional_generation", "autoencoder"] = "conditional_generation",
 ) -> PreparedBroadCorpus:
     """Verify train/validation clips and normalize them without filtering identities."""
 
@@ -252,6 +253,9 @@ def prepare_broad_corpus(
         raise ValueError("target_size must be a positive integer")
     if isinstance(target_frames, bool) or not isinstance(target_frames, int) or target_frames <= 0:
         raise ValueError("target_frames must be a positive integer")
+    if usage not in {"conditional_generation", "autoencoder"}:
+        raise ValueError("usage must be 'conditional_generation' or 'autoencoder'")
+    _require_manifest_usage(manifest_path, usage)
     train_clips = load_materialized_training_clips(
         manifest_path,
         split="train",
@@ -303,6 +307,31 @@ def prepare_broad_corpus(
         corpus_sha256=corpus_sha256,
         spatial_transform="left_aligned_floor_index_nearest_rgba_v1",
     )
+
+
+def _require_manifest_usage(
+    manifest_path: Path | str,
+    usage: Literal["conditional_generation", "autoencoder"],
+) -> None:
+    path = Path(manifest_path).resolve()
+    try:
+        value = json.loads(path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BroadTrainingContractError(
+            f"cannot inspect materialization eligibility: {path}"
+        ) from error
+    if not isinstance(value, dict):
+        raise BroadTrainingContractError("materialization eligibility root must be an object")
+    eligibility = value.get("model_eligibility")
+    if eligibility is None:
+        return
+    if not isinstance(eligibility, dict):
+        raise BroadTrainingContractError("materialization model_eligibility must be an object")
+    if eligibility.get(usage) is not True:
+        reason = eligibility.get("reason")
+        raise BroadTrainingContractError(
+            f"materialization is not eligible for {usage}: {reason or 'no reason recorded'}"
+        )
 
 
 def resize_rgba_nearest(rgba: np.ndarray, target_size: int) -> np.ndarray:

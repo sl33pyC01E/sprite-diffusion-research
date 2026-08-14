@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Literal
@@ -189,7 +191,11 @@ def build_mugen_dense_manifest(
         "schema_version": 1,
         "source_materializations": source_rows,
         "split_policy": {
-            "grouping": "transitive exact full-SFF and action-array SHA-256 components",
+            "grouping": (
+                "transitive normalized DEF identity labels plus exact full-SFF, "
+                "action-array, and nonempty-frame SHA-256 components"
+            ),
+            "identity_label_normalization": "Unicode NFKC, casefold, alphanumeric tokens",
             "test": "stable component digest buckets 950-999 of 1000",
             "train": "stable component digest buckets 0-899 of 1000",
             "validation": "stable component digest buckets 900-949 of 1000",
@@ -256,6 +262,18 @@ def _leakage_components(
         source = _object(character.get("source"), "character source")
         sff = _object(source.get("sff"), "character source SFF")
         tokens = {"sff:" + _sha256_text(sff, "sha256")}
+        definitions = character.get("definitions")
+        if not isinstance(definitions, list):
+            raise ValueError(f"definitions are invalid: {variant_id}")
+        identity_labels = {
+            normalized
+            for definition in definitions
+            if isinstance(definition, dict)
+            for key in ("display_name", "name")
+            if isinstance(definition.get(key), str)
+            if (normalized := _normalized_identity_label(definition[key]))
+        }
+        tokens.update("identity_label:" + value for value in identity_labels)
         for clip in by_slot.values():
             array = _object(clip.get("array"), "clip array")
             tokens.add("array:" + _sha256_text(array, "array_content_sha256"))
@@ -312,6 +330,11 @@ def _identity_label(definitions: list[Any], variant_id: str) -> str:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return variant_id
+
+
+def _normalized_identity_label(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(re.findall(r"[^\W_]+", normalized, flags=re.UNICODE))
 
 
 def _unique(rows: list[dict[str, Any]], key: str, label: str) -> dict[str, dict[str, Any]]:

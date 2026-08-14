@@ -185,6 +185,7 @@ def run_autoencoder_training(
         materialization_manifest,
         target_size=config.architecture.image_size,
         target_frames=8,
+        usage="autoencoder",
     )
     if not corpus.train or not corpus.validation:
         raise ValueError("autoencoder training requires train and validation rows")

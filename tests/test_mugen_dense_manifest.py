@@ -20,7 +20,15 @@ def _array_sha256(value: np.ndarray) -> str:
     return hashlib.sha256(header + value.tobytes(order="C")).hexdigest()
 
 
-def _root(root: Path, *, variant: str, sff_sha: str, shared_idle: np.ndarray) -> Path:
+def _root(
+    root: Path,
+    *,
+    variant: str,
+    sff_sha: str,
+    shared_idle: np.ndarray,
+    color_offset: int = 0,
+    display_name: str | None = None,
+) -> Path:
     root.mkdir()
     clips = []
     for index, slot in enumerate(("idle", "walk", "jump", "block", "attack_a", "attack_b")):
@@ -28,8 +36,18 @@ def _root(root: Path, *, variant: str, sff_sha: str, shared_idle: np.ndarray) ->
             value = shared_idle.copy()
         else:
             value = np.zeros((8, 128, 128, 4), dtype=np.uint8)
-            value[:, 20:24, 30 + index : 34 + index] = (index, 2, 3, 255)
-            value[4:, 24:28, 30 + index : 34 + index] = (4, 5, 6, 255)
+            value[:, 20:24, 30 + index : 34 + index] = (
+                index + color_offset,
+                2,
+                3,
+                255,
+            )
+            value[4:, 24:28, 30 + index : 34 + index] = (
+                4 + color_offset,
+                5,
+                6,
+                255,
+            )
         path = root / f"{variant}-{slot}.npy"
         np.save(path, value, allow_pickle=False)
         clips.append(
@@ -53,7 +71,7 @@ def _root(root: Path, *, variant: str, sff_sha: str, shared_idle: np.ndarray) ->
     character = {
         "clips": clips,
         "complete_six_slot_core": True,
-        "definitions": [{"display_name": variant, "name": variant}],
+        "definitions": [{"display_name": display_name or variant, "name": variant}],
         "identity_id": f"identity-{variant}",
         "source": {
             "air": {"sha256": "b" * 64},
@@ -85,6 +103,40 @@ def test_dense_manifest_keeps_exact_array_duplicates_in_one_split(tmp_path: Path
     assert len({row["split"] for row in manifest["records"]}) == 1
     assert manifest["records"][0]["reference"]["frame_index"] == 0
     assert len(manifest["records"][0]["reference"]["frame_array_content_sha256"]) == 64
+
+
+def test_dense_manifest_keeps_normalized_identity_labels_in_one_split(tmp_path: Path) -> None:
+    first_idle = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+    first_idle[:, 10:14, 10:14] = (1, 2, 3, 255)
+    first_idle[4:, 14:18, 10:14] = (3, 2, 1, 255)
+    second_idle = np.zeros((8, 128, 128, 4), dtype=np.uint8)
+    second_idle[:, 20:24, 20:24] = (7, 8, 9, 255)
+    second_idle[4:, 24:28, 20:24] = (9, 8, 7, 255)
+    first = _root(
+        tmp_path / "first",
+        variant="variant-a",
+        sff_sha="a" * 64,
+        shared_idle=first_idle,
+        display_name="M. Bison",
+    )
+    second = _root(
+        tmp_path / "second",
+        variant="variant-b",
+        sff_sha="d" * 64,
+        shared_idle=second_idle,
+        color_offset=10,
+        display_name="m bison",
+    )
+    quality = tmp_path / "quality.json"
+    export_mugen_stream_quality_audit((first, second), quality, disk_guard=DiskGuard(tmp_path, 0))
+
+    manifest = build_mugen_dense_manifest((first, second), quality)
+
+    assert manifest["counts"]["components"] == 1
+    assert len({row["split"] for row in manifest["records"]}) == 1
+    assert any(
+        "identity_label:m bison" in component["tokens"] for component in manifest["components"]
+    )
 
 
 def test_dense_manifest_rejects_materialization_changed_after_audit(tmp_path: Path) -> None:
