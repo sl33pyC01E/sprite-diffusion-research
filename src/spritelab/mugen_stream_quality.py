@@ -152,6 +152,104 @@ def export_mugen_stream_quality_audit(
     return hashlib.sha256(payload).hexdigest()
 
 
+def retier_mugen_stream_quality_audit(
+    source_audit_path: Path | str,
+    *,
+    policy: MugenStreamQualityPolicy,
+) -> dict[str, Any]:
+    """Recompute tier admission from a hash-verified audit without rereading pixels."""
+
+    source_path = Path(source_audit_path).resolve()
+    source_payload = source_path.read_bytes()
+    source = _object(json.loads(source_payload), "source quality audit")
+    if source.get("artifact_kind") != "mugen_streamed_core_quality_audit":
+        raise ValueError("source quality audit kind differs")
+    rows = source.get("quality_rows")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("source quality rows are invalid")
+    reason_counts: Counter[str] = Counter()
+    output_rows = []
+    for source_row in rows:
+        row = dict(source_row)
+        clips = row.get("clip_metrics")
+        if not isinstance(clips, list) or any(not isinstance(clip, dict) for clip in clips):
+            raise ValueError("source quality clip metrics are invalid")
+        reasons = []
+        if not bool(row.get("complete_six_slot_core")):
+            reasons.append("incomplete_six_slot_core")
+        if sum(int(clip.get("clipped_visible_pixels", 0)) for clip in clips):
+            reasons.append("visible_pixel_clipping")
+        if any(int(clip.get("visible_pixels", 0)) == 0 for clip in clips):
+            reasons.append("empty_visible_slot")
+        empty_frames = row.get("empty_output_frames")
+        if not isinstance(empty_frames, list):
+            raise ValueError("source empty_output_frames is invalid")
+        if empty_frames:
+            reasons.append("empty_output_frame")
+        scale = float(row.get("view_scale"))
+        dynamic_slots = int(row.get("dynamic_slots"))
+        distinct_arrays = int(row.get("distinct_slot_arrays"))
+        if not math.isfinite(scale) or scale <= 0:
+            raise ValueError("source view scale must be finite and positive")
+        if scale < policy.minimum_view_scale:
+            reasons.append("view_scale_below_minimum")
+        if dynamic_slots < policy.minimum_dynamic_slots:
+            reasons.append("insufficient_dynamic_slots")
+        if distinct_arrays < policy.minimum_distinct_slot_arrays:
+            reasons.append("insufficient_distinct_slot_arrays")
+        row["dense_eligible"] = not reasons
+        row["dense_exclusion_reasons"] = reasons
+        output_rows.append(row)
+        reason_counts.update(reasons)
+    counts = _object(source.get("counts"), "source quality counts").copy()
+    counts["dense_eligible_characters"] = sum(row["dense_eligible"] for row in output_rows)
+    counts["dense_exclusion_reasons"] = dict(sorted(reason_counts.items()))
+    artifact = dict(source)
+    artifact["counts"] = counts
+    artifact["policy"] = asdict(policy)
+    artifact["quality_rows"] = output_rows
+    artifact["retier_source"] = {
+        "file_sha256": hashlib.sha256(source_payload).hexdigest(),
+        "path": str(source_path),
+        "pixel_evidence": "all array bytes and metrics verified by the bound source audit",
+    }
+    return artifact
+
+
+def export_retiered_mugen_stream_quality_audit(
+    source_audit_path: Path | str,
+    output_path: Path | str,
+    *,
+    policy: MugenStreamQualityPolicy,
+    disk_guard: DiskGuard | None = None,
+) -> str:
+    """Publish a canonical no-clobber re-tiered audit."""
+
+    output = Path(output_path).resolve()
+    if output.exists():
+        raise FileExistsError(f"Refusing to replace re-tiered quality audit: {output}")
+    artifact = retier_mugen_stream_quality_audit(source_audit_path, policy=policy)
+    payload = _canonical(artifact)
+    (disk_guard or DiskGuard(Path(output.anchor), 100 * 1024**3)).require_capacity(
+        len(payload), label="re-tiered MUGEN streamed quality audit"
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(f".{output.name}.{os.getpid()}.partial")
+    if temporary.exists():
+        raise FileExistsError(f"Refusing to replace temporary re-tiered audit: {temporary}")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.rename(temporary, output)
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _audit_character(
     root: Path, character: dict[str, Any], policy: MugenStreamQualityPolicy
 ) -> dict[str, Any]:

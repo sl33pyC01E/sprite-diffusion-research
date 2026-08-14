@@ -15,6 +15,7 @@ $materializations = @(
     (Join-Path $processed 'mugen-anime-all-stars3-schema-core-b128-f8-v2')
 )
 $quality = Join-Path $reports 'mugen-six-action-coverage-all-scales-quality-audit-v1.json'
+$sourceQuality = Join-Path $reports 'mugen-six-action-full-quality-audit-v1.json'
 $dense = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-v1.json'
 $bridge = Join-Path $processed 'mugen-six-action-dense-coverage-all-scales-autoencoder-v1.json'
 
@@ -27,15 +28,16 @@ foreach ($materialization in $materializations) {
     }
 }
 if (-not (Test-Path -LiteralPath $quality)) {
-    $auditArguments = @((Join-Path $root 'scripts\audit_mugen_stream_quality_v1.py'))
-    foreach ($materialization in $materializations) {
-        $auditArguments += @('--materialization', $materialization)
+    if (-not (Test-Path -LiteralPath $sourceQuality)) {
+        throw "Source pixel audit is incomplete: $sourceQuality"
     }
-    $auditArguments += @(
+    $auditArguments = @(
+        (Join-Path $root 'scripts\retier_mugen_stream_quality_audit_v1.py'),
+        $sourceQuality,
+        $quality,
         '--minimum-view-scale', '0',
         '--minimum-dynamic-slots', '0',
-        '--minimum-distinct-slot-arrays', '1',
-        '--output', $quality
+        '--minimum-distinct-slot-arrays', '1'
     )
     & $python @auditArguments
     if ($LASTEXITCODE -ne 0) { throw 'Coverage-tier quality audit failed' }

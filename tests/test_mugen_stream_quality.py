@@ -12,6 +12,7 @@ from spritelab.mugen_stream_quality import (
     _medoid_frame_index,
     build_mugen_stream_quality_audit,
     export_mugen_stream_quality_audit,
+    retier_mugen_stream_quality_audit,
 )
 from spritelab.storage import DiskGuard
 
@@ -111,6 +112,28 @@ def test_zero_scale_floor_admits_any_positive_fitted_scale(tmp_path: Path) -> No
 
     assert row["dense_eligible"] is True
     assert "view_scale_below_minimum" not in row["dense_exclusion_reasons"]
+
+
+def test_retier_reuses_exact_pixel_audit_metrics(tmp_path: Path) -> None:
+    root = _fixture(tmp_path / "materialized", scale=0.25, dynamic_slots=1)
+    source_path = tmp_path / "source-quality.json"
+    export_mugen_stream_quality_audit((root,), source_path, disk_guard=DiskGuard(tmp_path, 0))
+    policy = MugenStreamQualityPolicy(
+        minimum_view_scale=0,
+        minimum_dynamic_slots=0,
+        minimum_distinct_slot_arrays=1,
+    )
+
+    retiered = retier_mugen_stream_quality_audit(source_path, policy=policy)
+    independently_built = build_mugen_stream_quality_audit((root,), policy=policy)
+
+    assert retiered["counts"] == independently_built["counts"]
+    assert retiered["policy"] == independently_built["policy"]
+    assert retiered["quality_rows"] == independently_built["quality_rows"]
+    assert (
+        retiered["retier_source"]["file_sha256"]
+        == hashlib.sha256(source_path.read_bytes()).hexdigest()
+    )
 
 
 def test_quality_audit_rejects_nonpositive_source_scale(tmp_path: Path) -> None:
