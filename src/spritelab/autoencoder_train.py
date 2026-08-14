@@ -173,11 +173,15 @@ def run_autoencoder_training(
     output_directory: Path | str,
     *,
     config: SpriteAutoencoderTrainingConfig | None = None,
+    resume_checkpoint_path: Path | str | None = None,
+    expected_resume_sha256: str | None = None,
     disk_guard: DiskGuard | None = None,
 ) -> AutoencoderTrainingResult:
     runtime = _require_torch()
     if config is None:
         config = SpriteAutoencoderTrainingConfig()
+    if (resume_checkpoint_path is None) != (expected_resume_sha256 is None):
+        raise ValueError("resume checkpoint and expected SHA-256 must be provided together")
     output = Path(output_directory).resolve()
     if output.exists():
         raise FileExistsError(f"Refusing to replace autoencoder training output: {output}")
@@ -205,6 +209,47 @@ def run_autoencoder_training(
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
     )
+    start_step = 0
+    lineage = None
+    if resume_checkpoint_path is not None:
+        resume_path = Path(resume_checkpoint_path).resolve()
+        resume_sha256 = _file_sha256(resume_path)
+        if resume_sha256 != expected_resume_sha256:
+            raise ValueError("autoencoder resume checkpoint SHA-256 mismatch")
+        try:
+            resume = runtime.load(resume_path, map_location=device, weights_only=True)
+        except Exception as error:
+            raise ValueError("autoencoder resume checkpoint failed safe load") from error
+        if not isinstance(resume, dict) or resume.get("artifact_kind") != (
+            "sprite_rgba_autoencoder_resume_checkpoint"
+        ):
+            raise ValueError("autoencoder resume checkpoint has the wrong artifact kind")
+        if resume.get("config") != asdict(config):
+            raise ValueError("autoencoder resume configuration differs")
+        if resume.get("corpus") != _corpus_record(corpus):
+            raise ValueError("autoencoder resume corpus differs")
+        start_step = resume.get("step")
+        if (
+            isinstance(start_step, bool)
+            or not isinstance(start_step, int)
+            or not 0 < start_step < config.steps
+        ):
+            raise ValueError("autoencoder resume step is outside the configured run")
+        model.load_state_dict(resume["model"], strict=True)
+        ema.load_state_dict(resume["ema"], strict=True)
+        optimizer.load_state_dict(resume["optimizer"])
+        try:
+            sampler.bit_generator.state = json.loads(resume["numpy_sampler_state_json"])
+            runtime.set_rng_state(resume["torch_cpu_rng_state"].cpu())
+            if device.type == "cuda" and resume.get("torch_cuda_rng_state") is not None:
+                runtime.cuda.set_rng_state(resume["torch_cuda_rng_state"], device)
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("autoencoder resume RNG state is invalid") from error
+        lineage = {
+            "parent_checkpoint_file_sha256": resume_sha256,
+            "parent_checkpoint_path": str(resume_path),
+            "parent_step": start_step,
+        }
     train_index = identity_action_frame_index(corpus.train)
     validation_plan = validation_frame_plan(
         corpus.validation, maximum_frames=config.validation_frames
@@ -216,8 +261,7 @@ def run_autoencoder_training(
     history_path = output / "training-history.jsonl"
     with history_path.open("x", encoding="utf-8", newline="\n") as history:
         model.train()
-        for step_index in range(config.steps):
-            step = step_index + 1
+        for step in range(start_step + 1, config.steps + 1):
             learning_rate = _learning_rate(step, config)
             for group in optimizer.param_groups:
                 group["lr"] = learning_rate
@@ -290,6 +334,8 @@ def run_autoencoder_training(
                     config=config,
                     step=step,
                     sampler=sampler,
+                    device=device,
+                    lineage=lineage,
                     disk_guard=disk_guard,
                 )
 
@@ -319,6 +365,7 @@ def run_autoencoder_training(
             "height": config.architecture.latent_size,
             "width": config.architecture.latent_size,
         },
+        "lineage": lineage,
         "schema_version": 1,
     }
     report_payload = _canonical_json(report)
@@ -437,6 +484,8 @@ def _write_checkpoint(
     config: SpriteAutoencoderTrainingConfig,
     step: int,
     sampler: np.random.Generator,
+    device: Any,
+    lineage: dict[str, Any] | None,
     disk_guard: DiskGuard | None,
 ) -> None:
     payload = {
@@ -449,6 +498,7 @@ def _write_checkpoint(
             sampler.bit_generator.state, separators=(",", ":"), sort_keys=True
         ),
         "optimizer": optimizer.state_dict(),
+        "lineage": lineage,
         # ``torch.__version__`` is a ``TorchVersion`` wrapper in recent PyTorch
         # releases.  Serializing the wrapper makes an otherwise tensor-only
         # checkpoint fail the default ``weights_only=True`` loader.  Persist
@@ -457,6 +507,9 @@ def _write_checkpoint(
         "schema_version": 1,
         "step": step,
         "torch_cpu_rng_state": runtime.get_rng_state(),
+        "torch_cuda_rng_state": (
+            runtime.cuda.get_rng_state(device) if device.type == "cuda" else None
+        ),
     }
     buffer = io.BytesIO()
     runtime.save(payload, buffer)

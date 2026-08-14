@@ -33,7 +33,11 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--resume-checkpoint", type=Path)
+    parser.add_argument("--expected-resume-sha256")
     args = parser.parse_args()
+    if (args.resume_checkpoint is None) != (args.expected_resume_sha256 is None):
+        raise ValueError("resume checkpoint and expected SHA-256 must be provided together")
     if args.profile == "legacy10000":
         steps = 10_000
         checkpoint_every = 2_500
@@ -92,6 +96,14 @@ def main() -> None:
         "manifest": str(args.manifest.resolve()),
         "output": str(output.resolve()),
         "output_absent": not output.exists(),
+        "resume": (
+            {
+                "checkpoint": str(args.resume_checkpoint.resolve()),
+                "sha256": args.expected_resume_sha256,
+            }
+            if args.resume_checkpoint is not None
+            else None
+        ),
         "train_frames": sum(row.rgba.shape[0] for row in corpus.train),
         "train_identities": len({row.identity_id for row in corpus.train}),
         "train_sequences": len(corpus.train),
@@ -106,6 +118,8 @@ def main() -> None:
         args.manifest,
         output,
         config=config,
+        resume_checkpoint_path=args.resume_checkpoint,
+        expected_resume_sha256=args.expected_resume_sha256,
         disk_guard=DiskGuard(ROOT, min_free_bytes=100 * 1024**3),
     )
     print(result)

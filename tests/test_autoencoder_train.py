@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -115,3 +117,81 @@ def test_tiny_cpu_training_publishes_hash_bound_bundle(
     assert checkpoint["runtime"]["torch"] == str(torch.__version__)
     with pytest.raises(FileExistsError, match="replace"):
         run_autoencoder_training("fixture.json", tmp_path / "run", config=config)
+
+
+def test_cpu_checkpoint_continuation_matches_uninterrupted_training(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    corpus = _corpus()
+    monkeypatch.setattr(training, "prepare_broad_corpus", lambda *args, **kwargs: corpus)
+    config = SpriteAutoencoderTrainingConfig(
+        architecture=SpriteAutoencoderConfig(
+            image_size=16,
+            base_channels=8,
+            latent_channels=4,
+            channel_multipliers=(1, 2),
+            residual_blocks=1,
+        ),
+        batch_size=2,
+        checkpoint_every=2,
+        device="cpu",
+        horizontal_flip_probability=0.5,
+        log_every=1,
+        precision="float32",
+        steps=4,
+        validate_every=2,
+        validation_frames=2,
+        warmup_steps=0,
+    )
+    uninterrupted = run_autoencoder_training(
+        "fixture.json", tmp_path / "uninterrupted", config=config
+    )
+    parent = tmp_path / "uninterrupted" / "training-step-0000002.pt"
+    parent_sha256 = hashlib.sha256(parent.read_bytes()).hexdigest()
+    continued = run_autoencoder_training(
+        "fixture.json",
+        tmp_path / "continued",
+        config=config,
+        resume_checkpoint_path=parent,
+        expected_resume_sha256=parent_sha256,
+    )
+
+    expected = torch.load(uninterrupted.checkpoint_path, map_location="cpu", weights_only=True)
+    actual = torch.load(continued.checkpoint_path, map_location="cpu", weights_only=True)
+    _assert_nested_equal(expected["model"], actual["model"])
+    _assert_nested_equal(expected["ema"], actual["ema"])
+    _assert_nested_equal(expected["optimizer"], actual["optimizer"])
+    assert expected["numpy_sampler_state_json"] == actual["numpy_sampler_state_json"]
+    assert torch.equal(expected["torch_cpu_rng_state"], actual["torch_cpu_rng_state"])
+    report = json.loads(continued.report_path.read_text(encoding="utf-8"))
+    assert report["lineage"] == {
+        "parent_checkpoint_file_sha256": parent_sha256,
+        "parent_checkpoint_path": str(parent.resolve()),
+        "parent_step": 2,
+    }
+
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        run_autoencoder_training(
+            "fixture.json",
+            tmp_path / "bad-resume",
+            config=replace(config, steps=4),
+            resume_checkpoint_path=parent,
+            expected_resume_sha256="0" * 64,
+        )
+    assert not (tmp_path / "bad-resume").exists()
+
+
+def _assert_nested_equal(expected, actual) -> None:
+    if isinstance(expected, torch.Tensor):
+        assert isinstance(actual, torch.Tensor)
+        assert torch.equal(expected, actual)
+    elif isinstance(expected, dict):
+        assert set(expected) == set(actual)
+        for key in expected:
+            _assert_nested_equal(expected[key], actual[key])
+    elif isinstance(expected, (list, tuple)):
+        assert len(expected) == len(actual)
+        for expected_item, actual_item in zip(expected, actual, strict=True):
+            _assert_nested_equal(expected_item, actual_item)
+    else:
+        assert expected == actual

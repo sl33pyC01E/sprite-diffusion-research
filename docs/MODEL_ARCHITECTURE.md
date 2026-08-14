@@ -92,6 +92,14 @@ respectively. The 2x representation therefore doubles latent area but materially
 improves one-pixel reconstruction and is the active quality contract; the 4x codec
 remains a compute ablation.
 
+Corpus-scale codec training is power-loss resumable. Each periodic checkpoint binds
+the exact corpus and full configuration and retains raw/EMA weights, optimizer state,
+NumPy frame-sampler state, and Torch CPU/CUDA RNG state. Continuation requires the
+literal parent checkpoint SHA-256, safely loads tensor-only state, and writes to a new
+no-clobber output directory with explicit parent lineage. A deterministic CPU split
+test proves that resuming a two-step checkpoint to step four is tensor-for-tensor
+identical to the uninterrupted four-step run.
+
 The active still-image experiment has one primary branch: a compact latent DiT
 trained from scratch over the custom RGBA codec, with a frozen text encoder used
 only to turn captions into conditioning vectors. No LoRA branch is authorized or
