@@ -468,6 +468,14 @@ occurrences produced 24 materialized characters, 19 complete six-slot characters
 retained for broad coverage and will be separated by explicit quality tiers rather
 than silently cropped or discarded.
 
+Both SFF generations use explicit sprite-local corruption recovery in this streamed
+view. A malformed PCX/RLE/LZ/PNG payload or a link to an already quarantined sprite
+produces an indexed decode-exclusion row with archive index, group/image key, reason,
+and literal error detail. Other valid sprites in the same SFF remain available, so an
+unreferenced corrupt effect cannot discard an otherwise complete fighter. Header,
+table, palette, and archive-member failures remain container-level failures; recovery
+never invents pixels, repairs compressed bytes, or substitutes runtime logic.
+
 Rights and authorship remain evidence, not inference. Each archive URL, archive hash,
 member path, DEF author/name claim, AIR hash, SFF hash, action number, timing row, and
 derived pixel hash stays separately indexable. Unknown fan-asset rights are not
@@ -490,8 +498,9 @@ separation. Thus independently drawn variants with the same literal name (for ex
 stronger than exact-pixel deduplication but still does not claim franchise-aware alias
 resolution for differently worded names.
 
-The dense autoencoder bridge is zero-copy: it points the verified generic training
-loader at the two source materialization roots instead of duplicating clip tensors.
+The broad and dense autoencoder bridges are zero-copy: they point the verified generic
+training loader at all selected source materialization roots instead of duplicating
+clip tensors.
 Until literal Spark captions are joined, its DEF-label descriptions are explicitly
 `autoencoder_only`; conditional-generation trainers fail closed on that artifact.
 Broad and dense views now share one split universe: transitive duplicate and literal
