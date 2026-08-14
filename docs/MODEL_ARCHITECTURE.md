@@ -608,3 +608,27 @@ Random-time flow remains available for future multi-step sampling experiments, b
 the MUGEN six-action ablation found that it competed with the explicitly evaluated
 endpoint. Scaling must therefore report both sample quality and the intended
 sampling regime rather than assuming a flow loss is beneficial by definition.
+## Pretrained latent still-image branch
+
+The quality path now treats canonical appearance generation and motion generation
+as separate conditional problems.  A first-stage pretrained latent image model
+maps a detailed appearance caption to one neutral canonical sprite still.  The
+second-stage pretrained latent image-to-video model receives that still plus an
+action verb.  Direct-pixel DiT runs remain useful controls and memorization
+diagnostics, but are not the primary quality architecture.
+
+The first Qwen-Image LoRA dataset is exported from the canonical MUGEN still plan
+as a Hugging Face ImageFolder.  It contains exactly one training still per train
+identity and excludes every validation/test identity.  Each authoritative RGBA
+source is independently hash-checked, composited over RGB 127 with exact straight
+alpha, enlarged from 128 to 512 pixels with nearest-neighbor sampling, and matched
+pixel-for-pixel to the previously inspected caption input.  Captions explicitly
+describe the neutral-gray preview canvas; they do not pretend the RGB trainer
+natively produces alpha.  Background removal is a separately evaluated decode
+step, never a silent mutation of the training target.
+
+The intended LoRA control uses the official Diffusers Qwen-Image trainer with
+per-image captions, bf16, cached VAE latents, gradient checkpointing, 8-bit Adam,
+and no checkpoint retention limit.  Zero-shot held-out prompts run first.  A LoRA
+run is accepted only if it improves the fixed validation identities under matched
+seeds without merely copying the gray canvas or collapsing distinct captions.
