@@ -25,12 +25,13 @@ def refinement_config(profile: str) -> LatentMotionTrainingConfig:
     """Return paired control/action configs that differ only in contrast weight."""
 
     profiles = {
-        "endpoint-control3000": (3_000, 0.0),
-        "endpoint-action3000": (3_000, 1.0),
-        "endpoint-action10000": (10_000, 1.0),
+        "endpoint-control3000": (3_000, 0.0, 0.0),
+        "endpoint-action3000": (3_000, 1.0, 0.0),
+        "endpoint-pixel-action3000": (3_000, 0.0, 0.5),
+        "endpoint-pixel-action10000": (10_000, 0.0, 0.5),
     }
     try:
-        steps, action_weight = profiles[profile]
+        steps, action_weight, pixel_action_weight = profiles[profile]
     except KeyError as error:
         raise ValueError(f"unsupported refinement profile: {profile}") from error
     return LatentMotionTrainingConfig(
@@ -41,6 +42,7 @@ def refinement_config(profile: str) -> LatentMotionTrainingConfig:
         latent_endpoint_weight=1.0,
         pixel_endpoint_weight=2.0,
         action_contrast_weight=action_weight,
+        pixel_action_contrast_weight=pixel_action_weight,
         time_sampling="endpoint",
         endpoint_sample_probability=0.0,
         inference_steps=1,
@@ -69,7 +71,8 @@ def main() -> None:
         choices=(
             "endpoint-control3000",
             "endpoint-action3000",
-            "endpoint-action10000",
+            "endpoint-pixel-action3000",
+            "endpoint-pixel-action10000",
         ),
         required=True,
     )

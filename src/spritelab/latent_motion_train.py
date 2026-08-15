@@ -68,6 +68,7 @@ class LatentMotionTrainingConfig:
     latent_endpoint_weight: float = 1.0
     pixel_endpoint_weight: float = 1.0
     action_contrast_weight: float = 0.0
+    pixel_action_contrast_weight: float = 0.0
     time_sampling: TimeSampling = "uniform"
     endpoint_sample_probability: float = 0.25
     inference_steps: int = 16
@@ -121,6 +122,7 @@ class LatentMotionTrainingConfig:
             "latent_endpoint_weight",
             "pixel_endpoint_weight",
             "action_contrast_weight",
+            "pixel_action_contrast_weight",
             "endpoint_sample_probability",
         ):
             value = getattr(self, name)
@@ -1177,6 +1179,7 @@ def _train(
         accumulated_latent = 0.0
         accumulated_pixel = 0.0
         accumulated_action_contrast = 0.0
+        accumulated_pixel_action_contrast = 0.0
         accumulated_loss = 0.0
         for _ in range(config.gradient_accumulation):
             selection = _sample_target_distinct_pair(train_pairs, generator=sampler_generator)
@@ -1220,10 +1223,20 @@ def _train(
                 generated_latent = (reference.unsqueeze(1) + generated_residual) * std + mean
                 logits = decoder.decode_logits(generated_latent.reshape(-1, 8, 64, 64))
                 pixel_loss = sprite_reconstruction_loss(logits, target_rgba).total
+                pixel_action_contrast_loss = (
+                    _matched_pixel_action_contrast_loss(
+                        runtime,
+                        predicted_rgba=runtime.sigmoid(logits).reshape(2, 8, 4, 128, 128),
+                        target_rgba=target_rgba.reshape(2, 8, 4, 128, 128),
+                    )
+                    if config.pixel_action_contrast_weight
+                    else latent_loss.new_zeros(())
+                )
                 loss = (
                     config.latent_endpoint_weight * latent_loss
                     + config.pixel_endpoint_weight * pixel_loss
                     + config.action_contrast_weight * action_contrast_loss
+                    + config.pixel_action_contrast_weight * pixel_action_contrast_loss
                 )
                 scaled = loss / config.gradient_accumulation
             if not bool(runtime.isfinite(scaled)):
@@ -1232,6 +1245,7 @@ def _train(
             accumulated_latent += float(latent_loss.detach().cpu())
             accumulated_pixel += float(pixel_loss.detach().cpu())
             accumulated_action_contrast += float(action_contrast_loss.detach().cpu())
+            accumulated_pixel_action_contrast += float(pixel_action_contrast_loss.detach().cpu())
             accumulated_loss += float(loss.detach().cpu())
         gradient_norm = float(
             runtime.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
@@ -1271,6 +1285,9 @@ def _train(
                 "learning_rate": learning_rate,
                 "loss": accumulated_loss / config.gradient_accumulation,
                 "pixel_endpoint_loss": accumulated_pixel / config.gradient_accumulation,
+                "pixel_action_contrast_loss": (
+                    accumulated_pixel_action_contrast / config.gradient_accumulation
+                ),
                 "step": step,
                 "validation": latest_validation
                 if step == 1 or step % config.validate_every == 0
@@ -1771,6 +1788,41 @@ def _matched_action_contrast_loss(
         estimated_clean[0] - estimated_clean[1],
         target_clean[0] - target_clean[1],
     )
+
+
+def _matched_pixel_action_contrast_loss(
+    runtime: Any,
+    *,
+    predicted_rgba: Any,
+    target_rgba: Any,
+) -> Any:
+    """Force authored pixel deltas and correct action-target preference."""
+
+    expected = tuple(target_rgba.shape)
+    if len(expected) != 5 or expected[0] != 2 or expected[2] != 4:
+        raise ValueError("matched pixel action tensors must have shape [2,T,4,H,W]")
+    if tuple(predicted_rgba.shape) != expected:
+        raise ValueError("matched pixel action tensors must share one shape")
+    predicted_alpha = predicted_rgba[:, :, 3:4]
+    target_alpha = target_rgba[:, :, 3:4]
+    predicted_pm = runtime.cat((predicted_rgba[:, :, :3] * predicted_alpha, predicted_alpha), dim=2)
+    target_pm = runtime.cat((target_rgba[:, :, :3] * target_alpha, target_alpha), dim=2)
+    target_distance = runtime.nn.functional.l1_loss(target_pm[0], target_pm[1])
+    delta_error = runtime.nn.functional.l1_loss(
+        predicted_pm[0] - predicted_pm[1],
+        target_pm[0] - target_pm[1],
+    )
+    own_error = 0.5 * (
+        runtime.nn.functional.l1_loss(predicted_pm[0], target_pm[0])
+        + runtime.nn.functional.l1_loss(predicted_pm[1], target_pm[1])
+    )
+    swapped_error = 0.5 * (
+        runtime.nn.functional.l1_loss(predicted_pm[0], target_pm[1])
+        + runtime.nn.functional.l1_loss(predicted_pm[1], target_pm[0])
+    )
+    denominator = target_distance.clamp_min(1e-4)
+    preference = runtime.relu(own_error - swapped_error + 0.1 * target_distance)
+    return delta_error / denominator + preference / denominator
 
 
 def _paired_appearance_metrics(

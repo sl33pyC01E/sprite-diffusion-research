@@ -15,6 +15,7 @@ from spritelab.latent_motion_train import (
     _ema_checkpoint_artifact_kind,
     _ema_update,
     _matched_action_contrast_loss,
+    _matched_pixel_action_contrast_loss,
     _paired_action_metrics,
     _paired_appearance_metrics,
     _paired_temporal_motion_metrics,
@@ -83,6 +84,9 @@ def test_config_rejects_negative_action_contrast_weight() -> None:
     with pytest.raises(ValueError, match="action_contrast_weight"):
         LatentMotionTrainingConfig(action_contrast_weight=-0.01)
 
+    with pytest.raises(ValueError, match="pixel_action_contrast_weight"):
+        LatentMotionTrainingConfig(pixel_action_contrast_weight=-0.01)
+
 
 def test_flow_config_requires_a_multistep_sampler() -> None:
     with pytest.raises(ValueError, match="at least two inference steps"):
@@ -126,6 +130,13 @@ def test_endpoint_refinement_control_differs_only_in_action_weight() -> None:
 def test_endpoint_refinement_rejects_unknown_profile() -> None:
     with pytest.raises(ValueError, match="unsupported refinement profile"):
         refinement_config("not-a-profile")
+
+
+def test_pixel_action_refinement_targets_visible_causal_output() -> None:
+    config = refinement_config("endpoint-pixel-action3000")
+
+    assert config.action_contrast_weight == pytest.approx(0)
+    assert config.pixel_action_contrast_weight == pytest.approx(0.5)
 
 
 def test_training_times_are_shared_across_a_matched_pair() -> None:
@@ -259,6 +270,47 @@ def test_matched_action_contrast_loss_rejects_shape_mismatch() -> None:
             torch,
             estimated_clean=target[:1],
             target_clean=target,
+        )
+
+
+def test_matched_pixel_action_loss_rewards_exact_and_rejects_collapse() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 2, 4, 2, 2))
+    target[0, :, 0, 0, 0] = 1
+    target[0, :, 3, 0, 0] = 1
+    target[1, :, 1, 1, 1] = 1
+    target[1, :, 3, 1, 1] = 1
+
+    exact = _matched_pixel_action_contrast_loss(
+        torch,
+        predicted_rgba=target,
+        target_rgba=target,
+    )
+    collapsed = _matched_pixel_action_contrast_loss(
+        torch,
+        predicted_rgba=target[:1].expand_as(target),
+        target_rgba=target,
+    )
+    swapped = _matched_pixel_action_contrast_loss(
+        torch,
+        predicted_rgba=torch.flip(target, (0,)),
+        target_rgba=target,
+    )
+
+    assert exact.item() == pytest.approx(0)
+    assert collapsed.item() > exact.item()
+    assert swapped.item() > collapsed.item()
+
+
+def test_matched_pixel_action_loss_rejects_shape_mismatch() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 2, 4, 2, 2))
+
+    with pytest.raises(ValueError, match="share one shape"):
+        _matched_pixel_action_contrast_loss(
+            torch,
+            predicted_rgba=target[:1],
+            target_rgba=target,
         )
 
 
