@@ -940,3 +940,56 @@ motion training cannot repair an incorrect Stage-2 anchor. A complete held-out p
 therefore requires a better reference-plus-verb key-pose model or an explicitly trained
 robustness/refinement stage; teacher-forced motion metrics must not be reported as
 end-to-end performance.
+
+## Identity-preserving key-pose U-Net and final anchored-motion audit
+
+The Stage-2 comparison replaces the patch-token DiT with a 38.7-million-parameter
+multiscale residual U-Net. It preserves reference features through skip connections and
+injects four learned tokens for the requested verb through feature modulation at every
+resolution. The corpus, fixed frame-four target, six-way identity bundle, codec, pixel
+loss, action contrast, and 30,000-step budget are unchanged, so this is an architectural
+comparison rather than a different-data result.
+
+The final checkpoint SHA-256 is
+`381eb685c1e7dbaa6b8a6b4d2c721deadef2057064f0aef86ca00f794f6cb2f1` and the
+training report SHA-256 is
+`7e4b274fd8175385923ae48d52b9fce57a6dd134b3f78b82983d5c80212adeb6`.
+On 64 training identities, raw weights reach `0.979167` correct-target preference,
+`0.861305` of authored action separation, premultiplied-RGBA MAE `0.012498`, and alpha
+IoU@127 `0.852369`. On 64 identity-disjoint validation characters they reach `0.302083`
+preference, `0.609252` separation ratio, MAE `0.038019`, and IoU `0.543801`. The raw
+evaluation SHA-256 is
+`6a143ee8bf115d983fa18110b536cb817e8630063df0587847d04d4317f8b006`.
+
+EMA is slightly worse on held-out target preference but similar overall: `0.315104`
+preference, `0.598504` separation ratio, MAE `0.037930`, and IoU `0.543096`. Its report
+SHA-256 is
+`7414a905c246f685798bcc2a4e2981b3aa8b4c1fa51e5b5fd0547ccb417191c4`.
+Relative to the patch DiT, the U-Net materially improves held-out alpha shape and pixel
+error but does not materially solve held-out six-way action choice. It is a better
+identity-preserving Stage-2 baseline, not a successful production model.
+
+The anchored-motion model completed 10,000 steps. With the true middle pose, eight
+unseen identity bundles retain exact anchors, `0.833333` correct-target preference,
+`0.918380` of authored action separation, premultiplied-RGBA MAE `0.012980`, and temporal
+magnitude `0.985574` of target. The teacher-forced report SHA-256 is
+`a0d128d373a547fdd54fae96fc5e94c48bfe8aeabcf4d89e058c8b8f7ab98135`.
+When the true middle is replaced by the raw Stage-2 prediction, unseen preference drops
+to `0.250000`, separation ratio to `0.464360`, and full-loop MAE rises to `0.035310`;
+the predicted middle itself has MAE `0.035907`. That end-to-end interface report SHA-256
+is `1fe267469b8e1fdeee800f07eeb72bc9d60613dee1423dff112b3215d0e786fe`.
+
+## Broad MUGEN Stage-1 text-to-sprite input
+
+Captioning completed for all 4,062 broad-corpus identities. The caption manifest
+SHA-256 is
+`dc4fe2b3c559cbe7e2ae92f30f0537ffb92246c78455748922be5aae7ba623bf`.
+The hash-bound compact still plan contains 32,496 eligible idle-reference frames across
+3,721 train, 170 validation, and 171 test identities; its SHA-256 is
+`90e7152cf024b84329c7d3ba844c092680152b1c7267ca5213a11299992acb19`.
+The frozen 77x768 CLIP-state cache SHA-256 is
+`17eb24160eaa10964994f58e355b9aef4e9663524a65cf7922d4194a11e19136`.
+Every prompt passed the 77-token check without truncation, and every selected sequence
+is present in the existing 2x-RGBA latent cache. The scratch Stage-1 DiT run uses 4,062
+identities rather than the earlier tiny demonstrations; any future text-to-sprite claim
+must still report train and identity-disjoint validation outputs separately.

@@ -18,10 +18,13 @@ produced once per identity reference rather than once per action. Motion and pos
 are excluded from the identity-appearance prompt where the caption contract can do so
 reliably.
 
-The active broad caption input contains 4,062 identity variants. Caption records are
-append-only and hash-bound to the exact rendered reference image, prompt, caption model
-identity, and source variant. A complete caption manifest must exist before a broad
-still-image training plan can be published.
+The broad caption input contains 4,062 identity variants. All 4,062 captions are now
+complete and hash-bound to the exact rendered reference image, request, caption model,
+and source variant. Their structured visible facts are projected into whole-phrase,
+priority-ordered prompts capped at 32 whitespace words. The frozen SD1 CLIP tokenizer
+then verifies that every prompt fits its 77-token context; no prompt is silently
+truncated. The Stage-1 split contains 3,721 train, 170 validation, and 171 test
+identities, with eight eligible neutral-reference frames per identity.
 
 ## Stage 2: canonical sprite and verb to one action pose
 
@@ -82,9 +85,10 @@ Implementation:
 - `src/spritelab/anchored_motion_train.py`
 - `scripts/run_mugen_anchored_motion_train_v1.py`
 
-Initial Stage 3 training uses the true frame-4 anchor. A later robustness phase must mix
-in hash-bound Stage 2 predictions before end-to-end inference quality can be claimed.
-Until that phase is run, evaluation must say **teacher-forced middle anchor**.
+Initial Stage 3 training uses the true frame-4 anchor. Evaluation must distinguish this
+**teacher-forced middle anchor** result from the separately measured predicted-keypose
+result. The latter is the current end-to-end Stage-2-to-Stage-3 interface test and shows
+that key-pose transfer, rather than trajectory reconstruction, is the dominant error.
 
 ## Required evaluation order
 
