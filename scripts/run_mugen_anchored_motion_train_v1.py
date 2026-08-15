@@ -1,0 +1,96 @@
+"""Train hard-clamped start/middle/start MUGEN interpolation."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from dataclasses import asdict
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from spritelab.anchored_motion_train import (  # noqa: E402
+    AnchoredMotionTrainingConfig,
+    run_anchored_motion_training,
+)
+from spritelab.latent_keypose_train import build_keypose_action_bundles  # noqa: E402
+from spritelab.latent_motion_train import load_latent_motion_training_corpus  # noqa: E402
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--resume-checkpoint", type=Path)
+    parser.add_argument("--expected-resume-sha256")
+    parser.add_argument("--preflight-only", action="store_true")
+    args = parser.parse_args()
+    if (args.resume_checkpoint is None) != (args.expected_resume_sha256 is None):
+        parser.error("resume checkpoint and expected SHA-256 must be supplied together")
+    output = args.output.resolve()
+    if output.exists():
+        raise FileExistsError(f"Refusing to replace anchored-motion output: {output}")
+    config = AnchoredMotionTrainingConfig()
+    corpus = load_latent_motion_training_corpus(
+        args.manifest, verify_hashes=True, array_loading="lazy"
+    )
+    train_bundles = build_keypose_action_bundles(corpus, corpus.train_indices)
+    validation_bundles = build_keypose_action_bundles(corpus, corpus.validation_indices)
+    resume = None
+    if args.resume_checkpoint is not None:
+        checkpoint = args.resume_checkpoint.resolve()
+        actual = file_sha256(checkpoint)
+        if actual != args.expected_resume_sha256:
+            raise ValueError("resume checkpoint SHA-256 differs")
+        resume = {"path": str(checkpoint), "sha256": actual}
+    preflight = {
+        "action_vocabulary": list(corpus.action_vocabulary),
+        "anchor_contract": {
+            "anchor_frames": list(config.anchor_frame_indices),
+            "canonical_middle_frame": config.canonical_middle_frame_index,
+            "endpoint_frames_are_exact_reference": True,
+            "predicted_frames": [1, 2, 3, 5, 6],
+        },
+        "config": asdict(config),
+        "corpus": corpus.contract,
+        "output": str(output),
+        "resume": resume,
+        "train_action_bundles": len(train_bundles),
+        "validation_action_bundles": len(validation_bundles),
+    }
+    if args.preflight_only:
+        print(json.dumps(preflight, sort_keys=True))
+        return
+    result = run_anchored_motion_training(
+        args.manifest,
+        output,
+        config=config,
+        resume_checkpoint_path=args.resume_checkpoint,
+        expected_resume_sha256=args.expected_resume_sha256,
+    )
+    print(
+        json.dumps(
+            {
+                "checkpoint": str(result.checkpoint_path),
+                "output": str(result.output_directory),
+                "report": str(result.report_path),
+                "report_sha256": result.report_sha256,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
