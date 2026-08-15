@@ -40,6 +40,110 @@ magenta transparency key was implemented. Open Surge projection v2 now records a
 executes that transform with engine-source evidence. Old artifacts are preserved,
 not overwritten, and must not be used for appearance or alpha-quality claims.
 
+## Experiment progression — visible results
+
+The images below are part of this repository, not remote screenshots. Most motion
+examples are animated PNGs; open an image directly if a Markdown renderer displays
+only frame zero. **Target** means source supervision. **Generated** means model
+output. **In-sample** means the character/action was present in training; **held-out**
+means the character identity was excluded from training.
+
+### 1. Small direct-pixel DiTs: prove the training loop
+
+The first models worked directly in RGBA pixel space. Fetid Rat showed that the
+network could replay four actions when trained on one identity. The 48-clip model
+then exposed the limitation: it reduced pixel error but produced noisy, weakly
+identified sprites. These are memorization checks, not general generators.
+
+| Fetid Rat target | Fetid Rat generated | 48-clip target | 48-clip generated |
+|---|---|---|---|
+| ![Fetid Rat attack target](docs/media/studies/01-fetid-rat-target-attack.png) | ![Fetid Rat attack generated](docs/media/studies/01-fetid-rat-generated-attack.png) | ![Neon walk target](docs/media/studies/02-multi-identity-target-neon-walk.png) | ![Neon walk generated](docs/media/studies/02-multi-identity-generated-neon-walk.png) |
+
+### 2. Causal action tests: does the verb actually matter?
+
+TMWA Causal16 used matched noise and paired idle/walk examples so changing the
+action token was measurable. It improved from 1,000 to 2,000 steps, but remained an
+in-sample test. The broad semantic model then evaluated identity-disjoint characters:
+it learned rough action/shape cues but not production-quality identity detail.
+
+| Exact target | 1,000 steps | 2,000 steps | Broad held-out target | Broad held-out output |
+|---|---|---|---|---|
+| ![Skull Ice walk target](docs/media/studies/03-tmwa-causal-target-skull-ice-walk.png) | ![Skull Ice walk 1000](docs/media/studies/03-tmwa-causal-generated-1000.png) | ![Skull Ice walk 2000](docs/media/studies/03-tmwa-causal-generated-2000.png) | ![TMWA held-out attack target](docs/media/studies/04-tmwa-semantic-target-attack.png) | ![TMWA held-out attack generated](docs/media/studies/04-tmwa-semantic-generated-attack.png) |
+
+The broad rectified-flow control did not fix this and is retained as a rejected
+control rather than omitted from the record:
+
+![Rejected broad flow control](docs/media/studies/05-tmwa-flow-generated-walk.png)
+
+### 3. MUGEN establishes a dense six-action schema
+
+MUGEN changed the data problem. Its conventional action numbers let the corpus align
+`idle`, `walk`, `jump`, `block`, `attack_a`, and `attack_b` across thousands of
+characters instead of treating unrelated clips as one loose animation bucket. A
+small latent classifier confirms that action information is present on completely
+held-out character identities; the two attack classes are the main confusion pair.
+
+![Held-out six-action classifier accuracy](docs/media/studies/16-mugen-action-classifier.svg)
+
+### 4. Large pretrained controls versus a compact latent route
+
+An SD 1.4 image LoRA and AnimateDiff temporal LoRA were tested as historical
+controls. They provided stronger priors but depend on large separately obtained base
+models and are not the desired consumer-scale architecture. The compact 2x RGBA
+autoencoder instead defines the detail ceiling for scratch-trained latent models.
+
+| SD 1.4 held-out still | AnimateDiff target | AnimateDiff generated | Compact codec reconstruction |
+|---|---|---|---|
+| ![SD sprite LoRA held-out](docs/media/studies/06-mugen-sd14-lora-heldout.png) | ![AnimateDiff target](docs/media/studies/09-mugen-animatediff-target-attack.png) | ![AnimateDiff generated](docs/media/studies/09-mugen-animatediff-generated-attack.png) | ![RGBA codec reconstruction](docs/media/studies/12-mugen-rgba-autoencoder.png) |
+
+### 5. Reference-conditioned latent motion
+
+With one reference character, latent motion plus pixel refinement nearly reaches the
+codec ceiling. That good-looking result is in-sample. Scaling the same idea to many
+identities shows the real problem: the model recognizes the subject and action but
+averages away fine pose and identity details. A denser scratch run exhibits the same
+failure mode.
+
+| One-character target | One-character generated | Broad target | Broad generated |
+|---|---|---|---|
+| ![Reference attack target](docs/media/studies/07-mugen-reference-target-attack.png) | ![Reference attack generated](docs/media/studies/07-mugen-reference-generated-attack.png) | ![Broad MUGEN attack target](docs/media/studies/08-mugen-broad-motion-target-attack.png) | ![Broad MUGEN attack generated](docs/media/studies/08-mugen-broad-motion-generated-attack.png) |
+
+| Dense six-action target | Dense six-action generated |
+|---|---|
+| ![Dense attack B target](docs/media/studies/10-mugen-dense-latent-target-attack-b.png) | ![Dense attack B generated](docs/media/studies/10-mugen-dense-latent-generated-attack-b.png) |
+
+### 6. Decompose generation into still, keypose, and trajectory
+
+The current direction separates three jobs: text-to-starting-sprite, reference plus
+verb to peak action pose, then start/peak/start anchors plus the verb to a complete
+loop. Fixed-middle DiT and identity U-Net studies isolate Stage 2. The anchored model
+tests Stage 3. This makes an averaging failure local and measurable instead of asking
+one network to discover appearance, pose, and time simultaneously.
+
+| Fixed-middle keypose DiT | Identity-conditioned keypose U-Net |
+|---|---|
+| ![Fixed-middle keypose study](docs/media/studies/11-mugen-fixed-middle-keypose.png) | ![Identity U-Net keypose study](docs/media/studies/14-mugen-keypose-unet.png) |
+
+| Anchored trajectory target | Anchored trajectory generated |
+|---|---|
+| ![Anchored target](docs/media/studies/15-mugen-anchored-target-attack-b.png) | ![Anchored generated](docs/media/studies/15-mugen-anchored-generated-attack-b.png) |
+
+### 7. Broad still-image model and crash-safe continuation
+
+The broad still-image DiT is the active scratch-trained image stage. This preview is
+from step 20,000 in the same line; the release preserves the later step-45,000 EMA
+and step-47,500 crash-resume state. The visual is deliberately labeled with its real
+step instead of being presented as a later render.
+
+| Broad still target | Generated at step 20,000 |
+|---|---|
+| ![Broad still target](docs/media/studies/13-mugen-broad-still-target.png) | ![Broad still generated at step 20000](docs/media/studies/13-mugen-broad-still-generated.png) |
+
+The complete per-study notes and weight mapping remain in
+[`docs/STUDY_GALLERY.md`](docs/STUDY_GALLERY.md), while exact checkpoint names,
+sizes, and SHA-256 values are in
+[`releases/best-weights-v1.json`](releases/best-weights-v1.json).
+
 ## Non-negotiable invariants
 
 - Raw downloads are immutable and addressed by SHA-256.
