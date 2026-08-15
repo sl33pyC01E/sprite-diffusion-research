@@ -130,15 +130,53 @@ one network to discover appearance, pose, and time simultaneously.
 |---|---|
 | ![Fixed-middle keypose study](docs/media/studies/11-mugen-fixed-middle-keypose.png) | ![Identity U-Net keypose study](docs/media/studies/14-mugen-keypose-unet.png) |
 
-Each anchored comparison contains the target and generated eight-frame trajectory.
+#### Attack A
 
-| Attack A | Attack B | Block |
-|---|---|---|
-| ![Anchored attack A comparison](docs/media/studies/15-mugen-anchored-attack-a-comparison.png) | ![Anchored attack B comparison](docs/media/studies/15-mugen-anchored-attack-b-comparison.png) | ![Anchored block comparison](docs/media/studies/15-mugen-anchored-block-comparison.png) |
+| Target loop | Generated loop |
+|---|---|
+| ![Attack A target loop](docs/media/studies/15-mugen-anchored-attack-a-target.gif) | ![Attack A generated loop](docs/media/studies/15-mugen-anchored-attack-a-generated.gif) |
 
-| Idle | Jump | Walk |
-|---|---|---|
-| ![Anchored idle comparison](docs/media/studies/15-mugen-anchored-idle-comparison.png) | ![Anchored jump comparison](docs/media/studies/15-mugen-anchored-jump-comparison.png) | ![Anchored walk comparison](docs/media/studies/15-mugen-anchored-walk-comparison.png) |
+<img src="docs/media/studies/15-mugen-anchored-attack-a-comparison.png" alt="Attack A target and generated sprite sheets" width="760">
+
+#### Attack B
+
+| Target loop | Generated loop |
+|---|---|
+| ![Attack B target loop](docs/media/studies/15-mugen-anchored-attack-b-target.gif) | ![Attack B generated loop](docs/media/studies/15-mugen-anchored-attack-b-generated.gif) |
+
+<img src="docs/media/studies/15-mugen-anchored-attack-b-comparison.png" alt="Attack B target and generated sprite sheets" width="760">
+
+#### Block
+
+| Target loop | Generated loop |
+|---|---|
+| ![Block target loop](docs/media/studies/15-mugen-anchored-block-target.gif) | ![Block generated loop](docs/media/studies/15-mugen-anchored-block-generated.gif) |
+
+<img src="docs/media/studies/15-mugen-anchored-block-comparison.png" alt="Block target and generated sprite sheets" width="760">
+
+#### Idle
+
+| Target loop | Generated loop |
+|---|---|
+| ![Idle target loop](docs/media/studies/15-mugen-anchored-idle-target.gif) | ![Idle generated loop](docs/media/studies/15-mugen-anchored-idle-generated.gif) |
+
+<img src="docs/media/studies/15-mugen-anchored-idle-comparison.png" alt="Idle target and generated sprite sheets" width="760">
+
+#### Jump
+
+| Target loop | Generated loop |
+|---|---|
+| ![Jump target loop](docs/media/studies/15-mugen-anchored-jump-target.gif) | ![Jump generated loop](docs/media/studies/15-mugen-anchored-jump-generated.gif) |
+
+<img src="docs/media/studies/15-mugen-anchored-jump-comparison.png" alt="Jump target and generated sprite sheets" width="760">
+
+#### Walk
+
+| Target loop | Generated loop |
+|---|---|
+| ![Walk target loop](docs/media/studies/15-mugen-anchored-walk-target.gif) | ![Walk generated loop](docs/media/studies/15-mugen-anchored-walk-generated.gif) |
+
+<img src="docs/media/studies/15-mugen-anchored-walk-comparison.png" alt="Walk target and generated sprite sheets" width="760">
 
 ### 7. Broad still-image DiT — 40,000-step evaluation
 

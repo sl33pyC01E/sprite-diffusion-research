@@ -159,16 +159,56 @@ Weight: `mugen-keypose-identity-unet-30000.pt`
 
 ## 15. Anchored trajectory model — 10,000 steps
 
-Stage-3 experiment conditioned on start/peak/end anchors. Every canonical action is
-shown below; each image compares the target and generated eight-frame trajectory.
+Stage-3 experiment conditioned on start/peak/end anchors. Each canonical action has
+a repeating target/generated GIF pair and its eight-slot sprite-sheet comparison.
 
-| Attack A | Attack B | Block |
-|---|---|---|
-| ![Attack A comparison](media/studies/15-mugen-anchored-attack-a-comparison.png) | ![Attack B comparison](media/studies/15-mugen-anchored-attack-b-comparison.png) | ![Block comparison](media/studies/15-mugen-anchored-block-comparison.png) |
+### Attack A
 
-| Idle | Jump | Walk |
-|---|---|---|
-| ![Idle comparison](media/studies/15-mugen-anchored-idle-comparison.png) | ![Jump comparison](media/studies/15-mugen-anchored-jump-comparison.png) | ![Walk comparison](media/studies/15-mugen-anchored-walk-comparison.png) |
+| Target loop | Generated loop |
+|---|---|
+| ![Attack A target](media/studies/15-mugen-anchored-attack-a-target.gif) | ![Attack A generated](media/studies/15-mugen-anchored-attack-a-generated.gif) |
+
+<img src="media/studies/15-mugen-anchored-attack-a-comparison.png" alt="Attack A sheets" width="760">
+
+### Attack B
+
+| Target loop | Generated loop |
+|---|---|
+| ![Attack B target](media/studies/15-mugen-anchored-attack-b-target.gif) | ![Attack B generated](media/studies/15-mugen-anchored-attack-b-generated.gif) |
+
+<img src="media/studies/15-mugen-anchored-attack-b-comparison.png" alt="Attack B sheets" width="760">
+
+### Block
+
+| Target loop | Generated loop |
+|---|---|
+| ![Block target](media/studies/15-mugen-anchored-block-target.gif) | ![Block generated](media/studies/15-mugen-anchored-block-generated.gif) |
+
+<img src="media/studies/15-mugen-anchored-block-comparison.png" alt="Block sheets" width="760">
+
+### Idle
+
+| Target loop | Generated loop |
+|---|---|
+| ![Idle target](media/studies/15-mugen-anchored-idle-target.gif) | ![Idle generated](media/studies/15-mugen-anchored-idle-generated.gif) |
+
+<img src="media/studies/15-mugen-anchored-idle-comparison.png" alt="Idle sheets" width="760">
+
+### Jump
+
+| Target loop | Generated loop |
+|---|---|
+| ![Jump target](media/studies/15-mugen-anchored-jump-target.gif) | ![Jump generated](media/studies/15-mugen-anchored-jump-generated.gif) |
+
+<img src="media/studies/15-mugen-anchored-jump-comparison.png" alt="Jump sheets" width="760">
+
+### Walk
+
+| Target loop | Generated loop |
+|---|---|
+| ![Walk target](media/studies/15-mugen-anchored-walk-target.gif) | ![Walk generated](media/studies/15-mugen-anchored-walk-generated.gif) |
+
+<img src="media/studies/15-mugen-anchored-walk-comparison.png" alt="Walk sheets" width="760">
 
 Weight: `mugen-anchored-motion-10000.pt`
 
