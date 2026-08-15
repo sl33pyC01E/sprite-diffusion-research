@@ -133,7 +133,11 @@ def main(
         raise ValueError(f"unsupported profile: {profile}")
     if profile in {"smoke", "pilot250"}:
         warm_start = False
-    corpus = load_latent_motion_training_corpus(manifest, verify_hashes=True)
+    corpus = load_latent_motion_training_corpus(
+        manifest,
+        verify_hashes=True,
+        array_loading="lazy",
+    )
     matched = build_matched_action_index(corpus.rows, corpus.train_indices)
     output = output or ROOT / "data/experiments" / output_name
     preflight = {

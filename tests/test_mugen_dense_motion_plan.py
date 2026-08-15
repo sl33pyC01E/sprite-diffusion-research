@@ -5,8 +5,12 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from spritelab.latent_motion_train import load_latent_motion_training_corpus
+from spritelab.latent_motion_train import (
+    LatentMotionTrainingError,
+    load_latent_motion_training_corpus,
+)
 from spritelab.mugen_dense_motion_plan import (
     build_mugen_dense_motion_plan,
     build_mugen_dense_motion_training_manifest,
@@ -166,6 +170,18 @@ def test_dense_motion_plan_preserves_six_actions_and_idle_reference(tmp_path: Pa
         "attack_b",
     }
 
+    lazy = load_latent_motion_training_corpus(
+        training_path,
+        verify_hashes=True,
+        array_loading="lazy",
+    )
+    assert lazy.target_latents.shape == corpus.target_latents.shape
+    assert lazy.reference_latents.shape == corpus.reference_latents.shape
+    assert lazy.target_rgba.shape == corpus.target_rgba.shape
+    assert np.array_equal(lazy.target_latents[[0, 1]], corpus.target_latents[[0, 1]])
+    assert np.array_equal(lazy.reference_latents[[0, 1]], corpus.reference_latents[[0, 1]])
+    assert np.array_equal(lazy.target_rgba[[0, 1]], corpus.target_rgba[[0, 1]])
+
 
 def test_dense_motion_plan_accepts_verified_broad_latent_superset(tmp_path: Path) -> None:
     broad_materialization, latent = _fixture(tmp_path)
@@ -186,6 +202,30 @@ def test_dense_motion_plan_accepts_verified_broad_latent_superset(tmp_path: Path
     assert scope["joined_sequences"] == 12
     assert scope["unused_latent_sequences"] == 6
     assert scope["source_materialization_path"] == str(broad_materialization.resolve())
+
+
+def test_lazy_motion_corpus_verifies_payload_on_first_access(tmp_path: Path) -> None:
+    materialization, latent = _fixture(tmp_path)
+    plan = build_mugen_dense_motion_plan(materialization, latent)
+    plan_path = tmp_path / "motion-plan.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    training = build_mugen_dense_motion_training_manifest(plan_path)
+    training_path = tmp_path / "training.json"
+    training_path.write_text(json.dumps(training), encoding="utf-8")
+    corpus = load_latent_motion_training_corpus(
+        training_path,
+        verify_hashes=True,
+        array_loading="lazy",
+    )
+
+    record = training["records"][0]["target"]["source_pixels"]
+    array_path = materialization.parent / record["relative_path"]
+    payload = bytearray(array_path.read_bytes())
+    payload[-1] ^= 1
+    array_path.write_bytes(payload)
+
+    with pytest.raises(LatentMotionTrainingError, match="file hash differs"):
+        _ = corpus.target_rgba[0]
 
 
 def test_dense_motion_plan_does_not_require_caption_closure(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ import math
 import os
 import shutil
 import tempfile
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import asdict, dataclass
 from itertools import combinations
 from pathlib import Path
@@ -47,6 +47,7 @@ else:
 Precision = Literal["float32", "bfloat16"]
 TimeSampling = Literal["endpoint", "uniform"]
 FlowSampler = Literal["euler", "heun"]
+ArrayLoading = Literal["eager", "lazy"]
 
 
 class LatentMotionTrainingError(ValueError):
@@ -163,15 +164,128 @@ class LatentMotionTrainingRow:
 
 
 @dataclass(frozen=True, slots=True)
+class _LazyArrayEntry:
+    path: Path
+    file_sha256: str
+    array_content_sha256: str
+    source_shape: tuple[int, ...]
+    item_index: int | None = None
+    item_array_content_sha256: str | None = None
+
+
+class _LazyVerifiedArrayStack:
+    """Index exact NPY payloads without materializing the full corpus in RAM."""
+
+    def __init__(
+        self,
+        entries: tuple[_LazyArrayEntry, ...],
+        *,
+        dtype: Any,
+        item_shape: tuple[int, ...],
+        verify_hashes: bool,
+        cache_size: int = 8,
+    ) -> None:
+        if not entries:
+            raise ValueError("lazy array stack cannot be empty")
+        self._entries = entries
+        self.dtype = np.dtype(dtype)
+        self.shape = (len(entries), *item_shape)
+        self._item_shape = item_shape
+        self._verify_hashes = verify_hashes
+        self._cache_size = cache_size
+        self._cache: OrderedDict[Path, np.ndarray] = OrderedDict()
+        self._verified_paths: set[Path] = set()
+        self._verified_items: set[tuple[Path, int]] = set()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def __getitem__(self, key: Any) -> np.ndarray:
+        if isinstance(key, (int, np.integer)):
+            index = int(key)
+            if index < 0:
+                index += len(self)
+            if not 0 <= index < len(self):
+                raise IndexError(index)
+            return self._load(index)
+        if isinstance(key, slice):
+            indices = tuple(range(*key.indices(len(self))))
+        elif isinstance(key, np.ndarray):
+            indices = tuple(int(value) for value in key.tolist())
+        else:
+            indices = tuple(int(value) for value in key)
+        if not indices:
+            return np.empty((0, *self._item_shape), dtype=self.dtype)
+        return np.stack(tuple(self._load(index) for index in indices))
+
+    def array_content_sha256(self, index: int) -> str:
+        entry = self._entries[index]
+        return entry.item_array_content_sha256 or entry.array_content_sha256
+
+    def _load(self, index: int) -> np.ndarray:
+        entry = self._entries[index]
+        value = self._cache.get(entry.path)
+        if value is None:
+            value = self._load_source(entry)
+            self._cache[entry.path] = value
+            self._cache.move_to_end(entry.path)
+            while len(self._cache) > self._cache_size:
+                self._cache.popitem(last=False)
+        else:
+            self._cache.move_to_end(entry.path)
+        if entry.item_index is None:
+            item = value
+        else:
+            item = np.ascontiguousarray(value[entry.item_index])
+            item_key = (entry.path, entry.item_index)
+            if self._verify_hashes and item_key not in self._verified_items:
+                if _array_sha256(item) != entry.item_array_content_sha256:
+                    raise LatentMotionTrainingError(f"lazy array item hash differs: {entry.path}")
+                self._verified_items.add(item_key)
+        if item.dtype != self.dtype or item.shape != self._item_shape:
+            raise LatentMotionTrainingError(f"lazy array geometry differs: {entry.path}")
+        return np.ascontiguousarray(item)
+
+    def _load_source(self, entry: _LazyArrayEntry) -> np.ndarray:
+        if self._verify_hashes and entry.path not in self._verified_paths:
+            payload = entry.path.read_bytes()
+            if hashlib.sha256(payload).hexdigest() != entry.file_sha256:
+                raise LatentMotionTrainingError(f"lazy array file hash differs: {entry.path}")
+            try:
+                value = np.load(io.BytesIO(payload), allow_pickle=False)
+            except (OSError, ValueError) as error:
+                raise LatentMotionTrainingError(
+                    f"lazy array is unreadable: {entry.path}"
+                ) from error
+            if _array_sha256(value) != entry.array_content_sha256:
+                raise LatentMotionTrainingError(f"lazy array content hash differs: {entry.path}")
+            self._verified_paths.add(entry.path)
+        else:
+            try:
+                value = np.load(entry.path, allow_pickle=False, mmap_mode="r")
+            except (OSError, ValueError) as error:
+                raise LatentMotionTrainingError(
+                    f"lazy array is unreadable: {entry.path}"
+                ) from error
+        if (
+            value.dtype != self.dtype
+            or value.shape != entry.source_shape
+            or not bool(np.isfinite(value).all())
+        ):
+            raise LatentMotionTrainingError(f"lazy array content differs: {entry.path}")
+        return value
+
+
+@dataclass(frozen=True, slots=True)
 class LatentMotionTrainingCorpus:
     rows: tuple[LatentMotionTrainingRow, ...]
     train_indices: tuple[int, ...]
     validation_indices: tuple[int, ...]
     test_indices: tuple[int, ...]
     action_vocabulary: tuple[str, ...]
-    target_latents: np.ndarray
-    reference_latents: np.ndarray
-    target_rgba: np.ndarray
+    target_latents: np.ndarray | _LazyVerifiedArrayStack
+    reference_latents: np.ndarray | _LazyVerifiedArrayStack
+    target_rgba: np.ndarray | _LazyVerifiedArrayStack
     phases: np.ndarray
     channel_mean: tuple[float, ...]
     channel_standard_deviation: tuple[float, ...]
@@ -347,9 +461,15 @@ def _sample_motion_residual(
 
 
 def load_latent_motion_training_corpus(
-    manifest_path: Path | str, *, verify_hashes: bool = True
+    manifest_path: Path | str,
+    *,
+    verify_hashes: bool = True,
+    array_loading: ArrayLoading = "eager",
 ) -> LatentMotionTrainingCorpus:
     """Load the complete canonical manifest and exact latent/RGBA closure."""
+
+    if array_loading not in {"eager", "lazy"}:
+        raise ValueError("array_loading must be eager or lazy")
 
     manifest_file = Path(manifest_path).resolve()
     manifest_bytes = manifest_file.read_bytes()
@@ -404,34 +524,34 @@ def load_latent_motion_training_corpus(
     materialization_root = materialization_path.parent
     latent_cache: dict[str, np.ndarray] = {}
     rows = []
-    target_latents = []
-    reference_latents = []
-    target_rgba = []
+    target_latents: list[np.ndarray | _LazyArrayEntry] = []
+    reference_latents: list[np.ndarray | _LazyArrayEntry] = []
+    target_rgba: list[np.ndarray | _LazyArrayEntry] = []
     phases = []
     for record in records:
         sequence_id = _required_text(record, "sequence_id")
         target = _required_dict(record, "target")
         reference = _required_dict(record, "reference")
         target_latent_record = _required_dict(target, "latent")
-        target_latent = _load_array(
-            latent_root,
-            target_latent_record,
-            dtype=np.float16,
-            shape=(8, 8, 64, 64),
-            label=f"target latent {sequence_id}",
-            verify_hashes=verify_hashes,
-            cache=latent_cache,
+        target_latent = (
+            _lazy_array_entry(
+                latent_root,
+                target_latent_record,
+                shape=(8, 8, 64, 64),
+                label=f"target latent {sequence_id}",
+            )
+            if array_loading == "lazy"
+            else _load_array(
+                latent_root,
+                target_latent_record,
+                dtype=np.float16,
+                shape=(8, 8, 64, 64),
+                label=f"target latent {sequence_id}",
+                verify_hashes=verify_hashes,
+                cache=latent_cache,
+            )
         )
         reference_record = _required_dict(reference, "latent")
-        reference_full = _load_array(
-            latent_root,
-            reference_record,
-            dtype=np.float16,
-            shape=(8, 8, 64, 64),
-            label=f"reference latent {sequence_id}",
-            verify_hashes=verify_hashes,
-            cache=latent_cache,
-        )
         frame_index = reference.get("frame_index")
         if (
             isinstance(frame_index, bool)
@@ -439,20 +559,52 @@ def load_latent_motion_training_corpus(
             or not 0 <= frame_index < 8
         ):
             raise LatentMotionTrainingError(f"reference frame index differs for {sequence_id}")
-        reference_frame = np.ascontiguousarray(reference_full[frame_index])
-        if verify_hashes and _array_sha256(reference_frame) != reference_record.get(
-            "frame_array_content_sha256"
-        ):
-            raise LatentMotionTrainingError(f"reference frame hash differs for {sequence_id}")
+        if array_loading == "lazy":
+            reference_frame = _lazy_array_entry(
+                latent_root,
+                reference_record,
+                shape=(8, 8, 64, 64),
+                label=f"reference latent {sequence_id}",
+                item_index=frame_index,
+                item_array_content_sha256=_required_hash(
+                    reference_record,
+                    "frame_array_content_sha256",
+                    f"reference frame {sequence_id}",
+                ),
+            )
+        else:
+            reference_full = _load_array(
+                latent_root,
+                reference_record,
+                dtype=np.float16,
+                shape=(8, 8, 64, 64),
+                label=f"reference latent {sequence_id}",
+                verify_hashes=verify_hashes,
+                cache=latent_cache,
+            )
+            reference_frame = np.ascontiguousarray(reference_full[frame_index])
+            if verify_hashes and _array_sha256(reference_frame) != reference_record.get(
+                "frame_array_content_sha256"
+            ):
+                raise LatentMotionTrainingError(f"reference frame hash differs for {sequence_id}")
         source_pixels = _required_dict(target, "source_pixels")
-        rgba = _load_array(
-            materialization_root,
-            source_pixels,
-            dtype=np.uint8,
-            shape=(8, 128, 128, 4),
-            label=f"target RGBA {sequence_id}",
-            verify_hashes=verify_hashes,
-            cache=None,
+        rgba = (
+            _lazy_array_entry(
+                materialization_root,
+                source_pixels,
+                shape=(8, 128, 128, 4),
+                label=f"target RGBA {sequence_id}",
+            )
+            if array_loading == "lazy"
+            else _load_array(
+                materialization_root,
+                source_pixels,
+                dtype=np.uint8,
+                shape=(8, 128, 128, 4),
+                label=f"target RGBA {sequence_id}",
+                verify_hashes=verify_hashes,
+                cache=None,
+            )
         )
         phase = np.asarray(target.get("phase"), dtype=np.float32)
         if phase.shape != (8,) or not np.isfinite(phase).all() or np.any((phase < 0) | (phase > 1)):
@@ -513,15 +665,38 @@ def load_latent_motion_training_corpus(
         "split_rows": {split: len(indices) for split, indices in split_indices.items()},
     }
     contract["canonical_sha256"] = hashlib.sha256(canonical_json_bytes(contract)).hexdigest()
+    if array_loading == "lazy":
+        target_latent_stack: np.ndarray | _LazyVerifiedArrayStack = _LazyVerifiedArrayStack(
+            tuple(target_latents),
+            dtype=np.float16,
+            item_shape=(8, 8, 64, 64),
+            verify_hashes=verify_hashes,
+        )
+        reference_latent_stack: np.ndarray | _LazyVerifiedArrayStack = _LazyVerifiedArrayStack(
+            tuple(reference_latents),
+            dtype=np.float16,
+            item_shape=(8, 64, 64),
+            verify_hashes=verify_hashes,
+        )
+        target_rgba_stack: np.ndarray | _LazyVerifiedArrayStack = _LazyVerifiedArrayStack(
+            tuple(target_rgba),
+            dtype=np.uint8,
+            item_shape=(8, 128, 128, 4),
+            verify_hashes=verify_hashes,
+        )
+    else:
+        target_latent_stack = np.ascontiguousarray(np.stack(target_latents))
+        reference_latent_stack = np.ascontiguousarray(np.stack(reference_latents))
+        target_rgba_stack = np.ascontiguousarray(np.stack(target_rgba))
     return LatentMotionTrainingCorpus(
         rows=row_tuple,
         train_indices=split_indices["train"],
         validation_indices=split_indices["validation"],
         test_indices=split_indices["test"],
         action_vocabulary=actions,
-        target_latents=np.ascontiguousarray(np.stack(target_latents)),
-        reference_latents=np.ascontiguousarray(np.stack(reference_latents)),
-        target_rgba=np.ascontiguousarray(np.stack(target_rgba)),
+        target_latents=target_latent_stack,
+        reference_latents=reference_latent_stack,
+        target_rgba=target_rgba_stack,
         phases=np.ascontiguousarray(np.stack(phases)),
         channel_mean=mean,
         channel_standard_deviation=std,
@@ -562,7 +737,9 @@ def run_latent_motion_training(
         raise ValueError("bfloat16 latent-motion training requires CUDA")
     guard = disk_guard or DiskGuard(output.parent, min_free_bytes=100 * 1024**3)
     guard.require_capacity(12 * 1024**3, label="broad latent-motion training")
-    corpus = load_latent_motion_training_corpus(manifest_path, verify_hashes=True)
+    corpus = load_latent_motion_training_corpus(
+        manifest_path, verify_hashes=True, array_loading="lazy"
+    )
     output.mkdir(parents=True, exist_ok=False)
     history_path = output / "training-history.jsonl"
     with history_path.open("x", encoding="utf-8", newline="\n") as history:
@@ -625,7 +802,9 @@ def evaluate_latent_motion_checkpoint(
     except Exception as error:
         raise LatentMotionTrainingError("inference checkpoint failed safe load") from error
     checkpoint_kind = _ema_checkpoint_artifact_kind(checkpoint)
-    corpus = load_latent_motion_training_corpus(manifest_path, verify_hashes=True)
+    corpus = load_latent_motion_training_corpus(
+        manifest_path, verify_hashes=True, array_loading="lazy"
+    )
     if checkpoint.get("corpus") != corpus.contract:
         raise LatentMotionTrainingError("inference checkpoint corpus differs")
     if _checkpoint_action_vocabulary(checkpoint, checkpoint_kind) != list(corpus.action_vocabulary):
@@ -1370,6 +1549,8 @@ def _balanced_pairs_from_index(
 def _target_rgba_digests(
     corpus: LatentMotionTrainingCorpus, indices: tuple[int, ...]
 ) -> dict[int, str]:
+    if isinstance(corpus.target_rgba, _LazyVerifiedArrayStack):
+        return {index: corpus.target_rgba.array_content_sha256(index) for index in indices}
     return {index: _array_sha256(corpus.target_rgba[index]) for index in indices}
 
 
@@ -1960,6 +2141,46 @@ def _load_array(
         raise LatentMotionTrainingError(f"{label} array hash differs")
     if cache is not None:
         cache[cache_key] = value
+    return value
+
+
+def _lazy_array_entry(
+    root: Path,
+    record: dict[str, Any],
+    *,
+    shape: tuple[int, ...],
+    label: str,
+    item_index: int | None = None,
+    item_array_content_sha256: str | None = None,
+) -> _LazyArrayEntry:
+    relative = _required_text(record, "relative_path")
+    path = (root / relative).resolve()
+    if root != path and root not in path.parents:
+        raise LatentMotionTrainingError(f"{label} path escapes root")
+    if not path.is_file():
+        raise LatentMotionTrainingError(f"{label} is absent")
+    if (item_index is None) != (item_array_content_sha256 is None):
+        raise ValueError("lazy item index and content hash must be supplied together")
+    if item_index is not None and not 0 <= item_index < shape[0]:
+        raise LatentMotionTrainingError(f"{label} item index differs")
+    return _LazyArrayEntry(
+        path=path,
+        file_sha256=_required_hash(record, "file_sha256", label),
+        array_content_sha256=_required_hash(record, "array_content_sha256", label),
+        source_shape=shape,
+        item_index=item_index,
+        item_array_content_sha256=item_array_content_sha256,
+    )
+
+
+def _required_hash(record: dict[str, Any], key: str, label: str) -> str:
+    value = record.get(key)
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise LatentMotionTrainingError(f"{label} {key} is not canonical SHA-256")
     return value
 
 
