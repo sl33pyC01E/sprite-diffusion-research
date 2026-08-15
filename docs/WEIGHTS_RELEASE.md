@@ -9,6 +9,10 @@ exact local source path, published asset name, byte count, SHA-256, experiment t
 and a short claim boundary for every weight file. Verify a downloaded asset before
 loading it.
 
+See `docs/STUDY_GALLERY.md` for animated targets, generated outputs, held-out
+examples, failed controls, codec reconstructions, and the classifier evaluation
+associated with these studies.
+
 The release has two purposes:
 
 - preserve the current compact three-stage MUGEN pipeline and its resumable Stage-1
@@ -29,4 +33,3 @@ users remain responsible for their own use and for obtaining any rights they nee
 Several historical adapters require separately obtained upstream model weights. The
 upstream weights are intentionally not republished here. Their pinned identities and
 source revisions remain documented in `docs/EXPERIMENTS.md` and the source indexes.
-

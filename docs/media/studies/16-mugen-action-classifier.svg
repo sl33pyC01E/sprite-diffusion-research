@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420" role="img" aria-labelledby="title desc">
+  <title id="title">MUGEN six-action classifier held-out identity accuracy</title>
+  <desc id="desc">Test accuracy by action: attack A 62.6%, attack B 47.1%, block 81.3%, idle 99.4%, jump 89.7%, walk 79.4%. Overall 76.6%.</desc>
+  <rect width="900" height="420" fill="#11151c"/>
+  <text x="42" y="45" fill="#f5f7fa" font-family="system-ui, sans-serif" font-size="24" font-weight="700">MUGEN latent action classifier</text>
+  <text x="42" y="74" fill="#98a6b7" font-family="system-ui, sans-serif" font-size="15">Held-out character identities · 930 clips · overall accuracy 76.6%</text>
+  <g font-family="system-ui, sans-serif" font-size="15">
+    <text x="42" y="123" fill="#d9e0e8">attack A</text><rect x="145" y="104" width="438" height="24" rx="4" fill="#e26464"/><text x="595" y="122" fill="#f5f7fa">62.6%</text>
+    <text x="42" y="169" fill="#d9e0e8">attack B</text><rect x="145" y="150" width="330" height="24" rx="4" fill="#e78b59"/><text x="487" y="168" fill="#f5f7fa">47.1%</text>
+    <text x="42" y="215" fill="#d9e0e8">block</text><rect x="145" y="196" width="569" height="24" rx="4" fill="#d9b64b"/><text x="726" y="214" fill="#f5f7fa">81.3%</text>
+    <text x="42" y="261" fill="#d9e0e8">idle</text><rect x="145" y="242" width="696" height="24" rx="4" fill="#65c88a"/><text x="853" y="260" fill="#f5f7fa" text-anchor="end">99.4%</text>
+    <text x="42" y="307" fill="#d9e0e8">jump</text><rect x="145" y="288" width="628" height="24" rx="4" fill="#58b7ce"/><text x="785" y="306" fill="#f5f7fa">89.7%</text>
+    <text x="42" y="353" fill="#d9e0e8">walk</text><rect x="145" y="334" width="556" height="24" rx="4" fill="#768ee8"/><text x="713" y="352" fill="#f5f7fa">79.4%</text>
+  </g>
+  <text x="42" y="397" fill="#98a6b7" font-family="system-ui, sans-serif" font-size="13">The two attack classes remain the principal confusion pair.</text>
+</svg>

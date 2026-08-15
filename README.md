@@ -5,6 +5,10 @@ sprite. The repository deliberately treats acquisition, provenance,
 normalization, and evaluation as part of the model rather than as disposable
 preprocessing.
 
+**[Visual study gallery](docs/STUDY_GALLERY.md)** ·
+**[Weight release guide](docs/WEIGHTS_RELEASE.md)** ·
+**[Exact weight manifest](releases/best-weights-v1.json)**
+
 The initial target is a transparent 64x64 RGBA, eight-frame animation. The
 fast baseline is an image-first diffusion pipeline; the main research target
 is a compact native-pixel spatiotemporal diffusion transformer.
