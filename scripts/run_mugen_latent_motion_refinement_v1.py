@@ -47,7 +47,7 @@ def refinement_config(profile: str) -> LatentMotionTrainingConfig:
         sampler_algorithm="euler",
         steps=steps,
         validate_every=500,
-        checkpoint_every=3_000 if steps == 3_000 else 5_000,
+        checkpoint_every=500 if steps == 3_000 else 5_000,
         validation_pairs=16,
         preview_pairs=6,
         seed=20260828,
