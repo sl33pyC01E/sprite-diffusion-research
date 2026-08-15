@@ -1,0 +1,163 @@
+{
+  "artifact_kind": "spritelab_best_weights_release_manifest",
+  "schema_version": 1,
+  "release_tag": "research-weights-2026-08-15",
+  "claim": "Research checkpoints only; no dataset, source sprites, or downloaded foundation-model weights are included.",
+  "total_assets": 17,
+  "total_bytes": 5853520792,
+  "assets": [
+    {
+      "id": "fetid-rat-pixeldit-alpha4-1500",
+      "tier": "historical-best",
+      "source_path": "data/experiments/fetid-rat-continuation-ablation-v4/alpha4/checkpoint.pt",
+      "release_asset": "fetid-rat-pixeldit-alpha4-1500.pt",
+      "bytes": 28981147,
+      "sha256": "f80c794f1c8a1f9f62d26e247a6385c04603f8a308cb8db7c73e7e0d53305684",
+      "note": "Best small four-action in-sample PixelDiT replay; not a general generator."
+    },
+    {
+      "id": "multi-identity-pixeldit-3000",
+      "tier": "historical-best",
+      "source_path": "data/experiments/multi-identity-b64-v2-corrected-baseline-3000-continuation-v1/checkpoint.pt",
+      "release_asset": "multi-identity-pixeldit-3000.pt",
+      "bytes": 29363754,
+      "sha256": "2585665eceb5f0d8f844a53b7071ba3b57812620e86a32b37ef439acb2cce124",
+      "note": "Corrected 48-clip PixelDiT continuation; limited memorization baseline."
+    },
+    {
+      "id": "tmwa-causal16-pixeldit-alpha4-6000",
+      "tier": "historical-best",
+      "source_path": "data/experiments/tmwa-causal16-b64-f8-alpha4-ew1-v1-6000/checkpoint.pt",
+      "release_asset": "tmwa-causal16-pixeldit-alpha4-6000.pt",
+      "bytes": 29323050,
+      "sha256": "394880c5e067059f01b1f9c2462e75bae66705944e11f04c0a5b058e9689b761",
+      "note": "Selected TMWA causal16 idle/walk checkpoint; in-sample action study."
+    },
+    {
+      "id": "tmwa-broad-semantic-pixeldit-4000",
+      "tier": "historical-best",
+      "source_path": "data/experiments/tmwa-broad-heldout-b128-f8-clip-v1-10000/checkpoint-ema-step4000.pt",
+      "release_asset": "tmwa-broad-semantic-pixeldit-4000.pt",
+      "bytes": 31889386,
+      "sha256": "fe56cef64059eee60b551b3668b49e7c4921984b65a008e5f0915b60def7aa9d",
+      "note": "Validation-selected semantic TMWA endpoint model; weak held-out recall."
+    },
+    {
+      "id": "tmwa-broad-flow-pixeldit-10000",
+      "tier": "rejected-control",
+      "source_path": "data/experiments/tmwa-broad-heldout-b128-f8-clip-flow-v2-10000/checkpoint-ema.pt",
+      "release_asset": "tmwa-broad-flow-pixeldit-10000.pt",
+      "bytes": 31891498,
+      "sha256": "c4f43c0f925b4f72a684b1d44d6bce1e2505e25d6923512dac45ce3311c06afb",
+      "note": "Rectified-flow ablation retained as a rejected control."
+    },
+    {
+      "id": "mugen-sd14-sprite-lora-2500",
+      "tier": "historical-best",
+      "source_path": "data/experiments/mugen-mffa-sd-pixelart-lora-canonical-v1-step2500-continuation-v1/training-step-0002500.pt",
+      "release_asset": "mugen-sd14-sprite-lora-2500.pt",
+      "bytes": 396668917,
+      "sha256": "0bc6640361843d3a4b18f67f532f5e0c01c6a00392c0241544fed349b400f68f",
+      "note": "Historical SD1.4 sprite-prior LoRA; requires its separately obtained base model."
+    },
+    {
+      "id": "mugen-reference-latent-motion-pixel-refine-9000",
+      "tier": "historical-best",
+      "source_path": "data/experiments/mugen-reference-motion-736300-pixel-refine-v1-parent6000-plus3000/checkpoint.pt",
+      "release_asset": "mugen-reference-latent-motion-pixel-refine-9000.pt",
+      "bytes": 9548642,
+      "sha256": "08befa96603389ae3e694a961280b9f976796ec71b51173fd3b3530984f9995e",
+      "note": "Best one-identity six-action latent-motion replay, near the codec floor."
+    },
+    {
+      "id": "mugen-broad-latent-motion-ema-15000",
+      "tier": "historical-best",
+      "source_path": "data/experiments/mugen-primary-motion-broad-v2-step15000/checkpoint-ema.pt",
+      "release_asset": "mugen-broad-latent-motion-ema-15000.pt",
+      "bytes": 70989070,
+      "sha256": "7235e6cba9d891fff5cae7b564457c99db6fadfbf1d4e10a7fa4a4f3b0198027",
+      "note": "Broad 225-identity endpoint baseline; measurable steering but blurry held-out output."
+    },
+    {
+      "id": "mugen-animatediff-temporal-lora-1000",
+      "tier": "rejected-control",
+      "source_path": "data/experiments/mugen-animatediff-motion-lora-orange-fighter-fp32-v1-step1000/training-step-0001000.pt",
+      "release_asset": "mugen-animatediff-temporal-lora-1000.pt",
+      "bytes": 72646340,
+      "sha256": "ad4ab2e722149fac79922d38e40b7ec3137999bd137efb6b247f7ed6a6fbb36a",
+      "note": "AnimateDiff temporal adapter rejected by the one-identity action gate; base models omitted."
+    },
+    {
+      "id": "mugen-dense-latent-motion-scratch-10000",
+      "tier": "pipeline-predecessor",
+      "source_path": "data/experiments/mugen-six-action-dense-latent-motion-scratch-v1-step50000/training-step-0010000.pt",
+      "release_asset": "mugen-dense-latent-motion-scratch-10000.pt",
+      "bytes": 938579023,
+      "sha256": "8dd03f0757314c7977bec8546e255923ffc40a017c327ea1f013fff8e942de46",
+      "note": "Dense 3,759-identity six-action scratch motion predecessor."
+    },
+    {
+      "id": "mugen-fixed-middle-keypose-dit-30000",
+      "tier": "pipeline-predecessor",
+      "source_path": "data/experiments/mugen-six-action-fixed-middle-keypose-direct-v1-step30000/training-step-0030000.pt",
+      "release_asset": "mugen-fixed-middle-keypose-dit-30000.pt",
+      "bytes": 957632071,
+      "sha256": "42edcf3d1955c7062e76496d3f4ec02a57d0c6e0a50e52ac67f6e44828d3a494",
+      "note": "Patch-DiT fixed-middle key-pose baseline superseded by the identity U-Net."
+    },
+    {
+      "id": "mugen-rgba-autoencoder-2x-20000",
+      "tier": "current-pipeline",
+      "source_path": "data/experiments/mugen-six-action-rgba-autoencoder-2x-v1-20000/training-step-0020000.pt",
+      "release_asset": "mugen-rgba-autoencoder-2x-20000.pt",
+      "bytes": 27455566,
+      "sha256": "6df0122a17214c3a8cd9edff7b057dc4572e125b0fa556de317b94cff1ac678e",
+      "note": "Current frozen 2x RGBA sprite codec."
+    },
+    {
+      "id": "mugen-broad-still-dit-ema-45000",
+      "tier": "current-pipeline",
+      "source_path": "data/experiments/mugen-six-action-broad-still-dit-scratch-v4i-b32-crashsafe-from40000-step50000/ema-step-0045000.pt",
+      "release_asset": "mugen-broad-still-dit-ema-45000.pt",
+      "bytes": 329488454,
+      "sha256": "47c4294ba5c330c7d42b5a318ab6128b76c7eb03c627957d7c8e021c8880feae",
+      "note": "Latest complete inference-only EMA export for broad text-to-sprite Stage 1."
+    },
+    {
+      "id": "mugen-broad-still-dit-resume-47500",
+      "tier": "resume-state",
+      "source_path": "data/experiments/mugen-six-action-broad-still-dit-scratch-v4j-b32-crashsafe-from45000-step50000/recovery-slot-2.pt",
+      "release_asset": "mugen-broad-still-dit-resume-47500.pt",
+      "bytes": 1317992936,
+      "sha256": "3b5c0a8fcaa6e96bb9b844a644dc7f8555e8eb0f7ac3e1ebf5440466076d877f",
+      "note": "Latest verified crash-safe Stage-1 resume state at step 47,500; includes optimizer/RNG state."
+    },
+    {
+      "id": "mugen-keypose-identity-unet-30000",
+      "tier": "current-pipeline",
+      "source_path": "data/experiments/mugen-six-action-keypose-identity-unet-v1-step30000/training-step-0030000.pt",
+      "release_asset": "mugen-keypose-identity-unet-30000.pt",
+      "bytes": 619580949,
+      "sha256": "381eb685c1e7dbaa6b8a6b4d2c721deadef2057064f0aef86ca00f794f6cb2f1",
+      "note": "Current identity-preserving six-action Stage-2 key-pose U-Net."
+    },
+    {
+      "id": "mugen-anchored-motion-10000",
+      "tier": "current-pipeline",
+      "source_path": "data/experiments/mugen-six-action-anchored-motion-v1-step30000/training-step-0010000.pt",
+      "release_asset": "mugen-anchored-motion-10000.pt",
+      "bytes": 957636325,
+      "sha256": "541fd93915c2cf4136b94e064cd41f8b3072189f8f9cea6e0d2874e43f85d3c0",
+      "note": "Current Stage-3 start/middle/start anchored trajectory model at step 10,000."
+    },
+    {
+      "id": "mugen-six-action-classifier",
+      "tier": "current-pipeline",
+      "source_path": "data/experiments/mugen-six-action-latent-classifier-v1/checkpoint.pt",
+      "release_asset": "mugen-six-action-classifier.pt",
+      "bytes": 3853664,
+      "sha256": "1db8a3650eb9af3a631ea495496729cc3fa52c92f1fbfccdb1b4943de5fcf733",
+      "note": "Auxiliary six-action latent classifier used for action diagnostics."
+    }
+  ]
+}
