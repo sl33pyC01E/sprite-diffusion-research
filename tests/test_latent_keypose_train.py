@@ -15,6 +15,7 @@ from spritelab.latent_keypose_train import (
     build_keypose_action_bundles,
 )
 from spritelab.latent_motion_train import LatentMotionTrainingRow
+from spritelab.models.latent_keypose_unet import LatentKeyposeUNetConfig
 from spritelab.models.latent_motion_dit import LatentMotionDiTConfig
 
 
@@ -185,3 +186,54 @@ def test_keypose_model_accepts_reference_verb_and_one_latent_frame() -> None:
 
     assert output.shape == video.shape
     assert torch.isfinite(output).all()
+
+
+def test_identity_unet_preserves_multiscale_reference_path_and_action_gradient() -> None:
+    torch = pytest.importorskip("torch")
+    config = LatentKeyposeTrainingConfig(
+        device="cpu",
+        precision="float32",
+        model_architecture="identity_unet",
+        model=LatentMotionDiTConfig(
+            latent_size=8,
+            num_frames=1,
+            latent_channels=4,
+            patch_size=2,
+            model_dim=16,
+            depth=1,
+            num_heads=4,
+            condition_dim=16,
+        ),
+        unet=LatentKeyposeUNetConfig(
+            latent_size=8,
+            latent_channels=4,
+            base_channels=8,
+            channel_multipliers=(1, 2),
+            residual_blocks=1,
+            condition_dim=16,
+            attention_heads=4,
+        ),
+    )
+    model = _build_keypose_model(config, 6)
+    video = torch.zeros((6, 1, 4, 8, 8))
+    reference = torch.randn((6, 4, 8, 8))
+    times = torch.ones((6,))
+    actions = torch.arange(6)
+    phases = torch.full((6, 1), 0.5)
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    target = actions[:, None, None, None, None].expand_as(video).float().div(5)
+    for step in range(3):
+        optimizer.zero_grad(set_to_none=True)
+        output = model(video, reference, times, actions, frame_phase=phases)
+        torch.nn.functional.mse_loss(output, target).backward()
+        if step < 2:
+            optimizer.step()
+
+    assert output.shape == video.shape
+    assert torch.isfinite(output).all()
+    assert model.output_convolution.weight.grad is not None
+    assert torch.isfinite(model.output_convolution.weight.grad).all()
+    assert model.action_embedding.weight.grad is not None
+    assert torch.isfinite(model.action_embedding.weight.grad).all()
+    assert model.action_embedding.weight.grad.abs().sum() > 0

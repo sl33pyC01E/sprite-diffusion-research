@@ -34,7 +34,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--profile",
-        choices=("endpoint30000", "direct30000"),
+        choices=("endpoint30000", "direct30000", "identity-unet-direct30000"),
         default="direct30000",
     )
     parser.add_argument("--resume-checkpoint", type=Path)
@@ -47,7 +47,10 @@ def main() -> None:
     if output.exists():
         raise FileExistsError(f"Refusing to replace key-pose output: {output}")
     config = LatentKeyposeTrainingConfig(
-        prediction_mode=("direct_residual" if args.profile == "direct30000" else "endpoint_flow")
+        prediction_mode=("endpoint_flow" if args.profile == "endpoint30000" else "direct_residual"),
+        model_architecture=(
+            "identity_unet" if args.profile == "identity-unet-direct30000" else "dit"
+        ),
     )
     corpus = load_latent_motion_training_corpus(
         args.manifest, verify_hashes=True, array_loading="lazy"

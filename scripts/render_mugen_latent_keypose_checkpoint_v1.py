@@ -30,6 +30,7 @@ from spritelab.latent_motion_train import (  # noqa: E402
     _load_frozen_decoder,
     load_latent_motion_training_corpus,
 )
+from spritelab.models.latent_keypose_unet import LatentKeyposeUNetConfig  # noqa: E402
 from spritelab.models.latent_motion_dit import LatentMotionDiTConfig  # noqa: E402
 from spritelab.spark_caption import canonical_json_bytes  # noqa: E402
 from spritelab.sprite_postprocess import composite_rgba_on_checkerboard  # noqa: E402
@@ -51,6 +52,9 @@ def _config_from_checkpoint(raw: object) -> LatentKeyposeTrainingConfig:
     if not isinstance(model, dict):
         raise ValueError("checkpoint model config must be an object")
     values["model"] = LatentMotionDiTConfig(**model)
+    unet = values.get("unet")
+    if isinstance(unet, dict):
+        values["unet"] = LatentKeyposeUNetConfig(**unet)
     # Checkpoints written before direct regression was added are endpoint-flow.
     values.setdefault("prediction_mode", "endpoint_flow")
     return LatentKeyposeTrainingConfig(**values)

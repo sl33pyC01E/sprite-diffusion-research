@@ -24,6 +24,10 @@ from spritelab.latent_motion_train import (
     build_matched_action_index,
     load_latent_motion_training_corpus,
 )
+from spritelab.models.latent_keypose_unet import (
+    LatentKeyposeUNetConfig,
+    ReferenceActionLatentKeyposeUNet,
+)
 from spritelab.models.latent_motion_dit import LatentMotionDiTConfig
 from spritelab.models.sprite_autoencoder import sprite_reconstruction_loss
 from spritelab.spark_caption import canonical_json_bytes
@@ -39,6 +43,7 @@ else:
 
 Precision = Literal["float32", "bfloat16"]
 KeyposePredictionMode = Literal["endpoint_flow", "direct_residual"]
+KeyposeModelArchitecture = Literal["dit", "identity_unet"]
 
 
 class LatentKeyposeTrainingError(ValueError):
@@ -71,6 +76,7 @@ class LatentKeyposeTrainingConfig:
     seed: int = 20260830
     device: str = "cuda"
     precision: Precision = "bfloat16"
+    model_architecture: KeyposeModelArchitecture = "dit"
     model: LatentMotionDiTConfig = LatentMotionDiTConfig(
         latent_size=64,
         num_frames=1,
@@ -81,6 +87,7 @@ class LatentKeyposeTrainingConfig:
         num_heads=6,
         condition_dim=384,
     )
+    unet: LatentKeyposeUNetConfig = LatentKeyposeUNetConfig()
 
     def __post_init__(self) -> None:
         for name in (
@@ -134,6 +141,13 @@ class LatentKeyposeTrainingConfig:
             raise ValueError("ema_decay must be in [0,1)")
         if self.model.num_frames != 1:
             raise ValueError("key-pose model must contain exactly one frame token plane")
+        if self.model_architecture not in {"dit", "identity_unet"}:
+            raise ValueError("model_architecture must be dit or identity_unet")
+        if self.model_architecture == "identity_unet":
+            if self.unet.latent_size != self.model.latent_size:
+                raise ValueError("key-pose U-Net and DiT latent sizes must match")
+            if self.unet.latent_channels != self.model.latent_channels:
+                raise ValueError("key-pose U-Net and DiT latent channels must match")
         if self.device not in {"cpu", "cuda"}:
             raise ValueError("device must be cpu or cuda")
         if self.precision not in {"float32", "bfloat16"}:
@@ -169,6 +183,13 @@ def build_keypose_action_bundles(
 
 
 def _build_keypose_model(config: LatentKeyposeTrainingConfig, action_count: int) -> Any:
+    if config.model_architecture == "identity_unet":
+        return ReferenceActionLatentKeyposeUNet(
+            action_count,
+            config.unet,
+            action_condition_scale=config.action_condition_scale,
+            action_token_count=config.action_token_count,
+        )
     from spritelab.latent_motion_train import _ActionConditionedMotionModel
 
     return _ActionConditionedMotionModel(
