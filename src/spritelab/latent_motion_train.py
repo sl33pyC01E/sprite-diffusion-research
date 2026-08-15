@@ -48,6 +48,7 @@ Precision = Literal["float32", "bfloat16"]
 TimeSampling = Literal["endpoint", "uniform"]
 FlowSampler = Literal["euler", "heun"]
 ArrayLoading = Literal["eager", "lazy"]
+ActionBatchMode = Literal["pair", "bundle"]
 
 
 class LatentMotionTrainingError(ValueError):
@@ -69,6 +70,7 @@ class LatentMotionTrainingConfig:
     pixel_endpoint_weight: float = 1.0
     action_contrast_weight: float = 0.0
     pixel_action_contrast_weight: float = 0.0
+    action_batch_mode: ActionBatchMode = "pair"
     time_sampling: TimeSampling = "uniform"
     endpoint_sample_probability: float = 0.25
     inference_steps: int = 16
@@ -136,6 +138,10 @@ class LatentMotionTrainingConfig:
             raise ValueError("endpoint_sample_probability must be in [0,1]")
         if self.time_sampling not in {"endpoint", "uniform"}:
             raise ValueError("time_sampling must be endpoint or uniform")
+        if self.action_batch_mode not in {"pair", "bundle"}:
+            raise ValueError("action_batch_mode must be pair or bundle")
+        if self.action_batch_mode == "bundle" and self.action_contrast_weight:
+            raise ValueError("bundle action batches require pixel-space action contrast")
         if self.sampler_algorithm not in {"euler", "heun"}:
             raise ValueError("sampler_algorithm must be euler or heun")
         if self.time_sampling == "endpoint" and (
@@ -401,6 +407,30 @@ def _sample_target_distinct_pair(
     identity = identities[int(runtime.randint(len(identities), (1,), generator=generator))]
     candidates = pairs[identity]
     return candidates[int(runtime.randint(len(candidates), (1,), generator=generator))]
+
+
+def _target_distinct_bundles_from_index(
+    index: dict[str, dict[str, int]], target_digests: dict[int, str]
+) -> dict[str, tuple[int, ...]]:
+    """Keep each dense identity's full action bundle when two targets differ."""
+
+    output = {}
+    for identity, actions in index.items():
+        bundle = tuple(actions[verb] for verb in sorted(actions, key=str.encode))
+        if len({target_digests[row] for row in bundle}) >= 2:
+            output[identity] = bundle
+    return output
+
+
+def _sample_target_distinct_bundle(
+    bundles: dict[str, tuple[int, ...]], *, generator: Any
+) -> tuple[int, ...]:
+    runtime = _require_torch()
+    if not bundles:
+        raise ValueError("target-distinct bundle index cannot be empty")
+    identities = tuple(bundles)
+    identity = identities[int(runtime.randint(len(identities), (1,), generator=generator))]
+    return bundles[identity]
 
 
 def _sample_training_times(
@@ -1157,9 +1187,9 @@ def _train(
             "parent_step": int(parent["step"]),
         }
     train_index = build_matched_action_index(corpus.rows, corpus.train_indices)
-    train_pairs = _target_distinct_pairs_from_index(
-        train_index, _target_rgba_digests(corpus, corpus.train_indices)
-    )
+    target_digests = _target_rgba_digests(corpus, corpus.train_indices)
+    train_pairs = _target_distinct_pairs_from_index(train_index, target_digests)
+    train_bundles = _target_distinct_bundles_from_index(train_index, target_digests)
     training_evaluation_selection = _balanced_matched_pairs(
         corpus, corpus.train_indices, config.validation_pairs
     )
@@ -1182,7 +1212,11 @@ def _train(
         accumulated_pixel_action_contrast = 0.0
         accumulated_loss = 0.0
         for _ in range(config.gradient_accumulation):
-            selection = _sample_target_distinct_pair(train_pairs, generator=sampler_generator)
+            selection = (
+                _sample_target_distinct_bundle(train_bundles, generator=sampler_generator)
+                if config.action_batch_mode == "bundle"
+                else _sample_target_distinct_pair(train_pairs, generator=sampler_generator)
+            )
             target, reference, target_rgba, phases, actions = _batch(
                 runtime, corpus, selection, device=device, mean=mean, std=std
             )
@@ -1192,7 +1226,7 @@ def _train(
             ).expand_as(clean)
             times = _sample_training_times(
                 runtime,
-                batch=2,
+                batch=len(selection),
                 config=config,
                 device=device,
                 generator=noise_generator,
@@ -1224,10 +1258,20 @@ def _train(
                 logits = decoder.decode_logits(generated_latent.reshape(-1, 8, 64, 64))
                 pixel_loss = sprite_reconstruction_loss(logits, target_rgba).total
                 pixel_action_contrast_loss = (
-                    _matched_pixel_action_contrast_loss(
-                        runtime,
-                        predicted_rgba=runtime.sigmoid(logits).reshape(2, 8, 4, 128, 128),
-                        target_rgba=target_rgba.reshape(2, 8, 4, 128, 128),
+                    (
+                        _matched_pixel_action_bundle_loss(
+                            runtime,
+                            predicted_rgba=runtime.sigmoid(logits).reshape(
+                                len(selection), 8, 4, 128, 128
+                            ),
+                            target_rgba=target_rgba.reshape(len(selection), 8, 4, 128, 128),
+                        )
+                        if config.action_batch_mode == "bundle"
+                        else _matched_pixel_action_contrast_loss(
+                            runtime,
+                            predicted_rgba=runtime.sigmoid(logits).reshape(2, 8, 4, 128, 128),
+                            target_rgba=target_rgba.reshape(2, 8, 4, 128, 128),
+                        )
                     )
                     if config.pixel_action_contrast_weight
                     else latent_loss.new_zeros(())
@@ -1823,6 +1867,62 @@ def _matched_pixel_action_contrast_loss(
     denominator = target_distance.clamp_min(1e-4)
     preference = runtime.relu(own_error - swapped_error + 0.1 * target_distance)
     return delta_error / denominator + preference / denominator
+
+
+def _matched_pixel_action_bundle_loss(
+    runtime: Any,
+    *,
+    predicted_rgba: Any,
+    target_rgba: Any,
+) -> Any:
+    """Separate every generated action from all other targets for one identity."""
+
+    expected = tuple(target_rgba.shape)
+    if len(expected) != 5 or expected[0] < 3 or expected[2] != 4:
+        raise ValueError("matched pixel action bundles must have shape [B>=3,T,4,H,W]")
+    if tuple(predicted_rgba.shape) != expected:
+        raise ValueError("matched pixel action bundles must share one shape")
+    predicted_alpha = predicted_rgba[:, :, 3:4]
+    target_alpha = target_rgba[:, :, 3:4]
+    predicted_pm = runtime.cat((predicted_rgba[:, :, :3] * predicted_alpha, predicted_alpha), dim=2)
+    target_pm = runtime.cat((target_rgba[:, :, :3] * target_alpha, target_alpha), dim=2)
+    own_errors = [
+        runtime.nn.functional.l1_loss(predicted_pm[index], target_pm[index])
+        for index in range(expected[0])
+    ]
+    delta_losses = []
+    preference_losses = []
+    for left, right in combinations(range(expected[0]), 2):
+        target_distance = runtime.nn.functional.l1_loss(target_pm[left], target_pm[right])
+        if float(target_distance.detach().cpu()) <= 1e-4:
+            continue
+        denominator = target_distance.clamp_min(1e-4)
+        delta_losses.append(
+            runtime.nn.functional.l1_loss(
+                predicted_pm[left] - predicted_pm[right],
+                target_pm[left] - target_pm[right],
+            )
+            / denominator
+        )
+        preference_losses.extend(
+            (
+                runtime.relu(
+                    own_errors[left]
+                    - runtime.nn.functional.l1_loss(predicted_pm[left], target_pm[right])
+                    + 0.1 * target_distance
+                )
+                / denominator,
+                runtime.relu(
+                    own_errors[right]
+                    - runtime.nn.functional.l1_loss(predicted_pm[right], target_pm[left])
+                    + 0.1 * target_distance
+                )
+                / denominator,
+            )
+        )
+    if not delta_losses:
+        raise ValueError("matched pixel action bundle has no target-distinct pairs")
+    return runtime.stack(delta_losses).mean() + runtime.stack(preference_losses).mean()
 
 
 def _paired_appearance_metrics(

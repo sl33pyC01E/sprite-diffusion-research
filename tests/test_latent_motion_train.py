@@ -15,13 +15,16 @@ from spritelab.latent_motion_train import (
     _ema_checkpoint_artifact_kind,
     _ema_update,
     _matched_action_contrast_loss,
+    _matched_pixel_action_bundle_loss,
     _matched_pixel_action_contrast_loss,
     _paired_action_metrics,
     _paired_appearance_metrics,
     _paired_temporal_motion_metrics,
     _sample_motion_residual,
+    _sample_target_distinct_bundle,
     _sample_target_distinct_pair,
     _sample_training_times,
+    _target_distinct_bundles_from_index,
     _target_distinct_pairs_from_index,
     build_matched_action_index,
     sample_matched_action_pair,
@@ -73,6 +76,25 @@ def test_target_distinct_pairs_exclude_action_aliases() -> None:
         pairs, generator=torch.Generator(device="cpu").manual_seed(3)
     )
     assert sampled in pairs["a"]
+
+
+def test_target_distinct_bundle_preserves_every_named_action() -> None:
+    torch = pytest.importorskip("torch")
+    index = {"a": {"attack": 0, "idle": 1, "walk": 2}}
+    bundles = _target_distinct_bundles_from_index(index, {0: "attack", 1: "pose", 2: "pose"})
+
+    assert bundles == {"a": (0, 1, 2)}
+    assert _sample_target_distinct_bundle(
+        bundles, generator=torch.Generator(device="cpu").manual_seed(3)
+    ) == (0, 1, 2)
+
+
+def test_target_distinct_bundle_excludes_all_alias_identity() -> None:
+    bundles = _target_distinct_bundles_from_index(
+        {"a": {"idle": 0, "walk": 1}}, {0: "same", 1: "same"}
+    )
+
+    assert bundles == {}
 
 
 def test_config_requires_a_denoising_objective() -> None:
@@ -135,6 +157,15 @@ def test_endpoint_refinement_rejects_unknown_profile() -> None:
 def test_pixel_action_refinement_targets_visible_causal_output() -> None:
     config = refinement_config("endpoint-pixel-action3000")
 
+    assert config.action_contrast_weight == pytest.approx(0)
+    assert config.pixel_action_contrast_weight == pytest.approx(0.5)
+
+
+def test_pixel_action_bundle_refinement_uses_all_six_actions_together() -> None:
+    config = refinement_config("endpoint-pixel-action-bundle3000")
+
+    assert config.action_batch_mode == "bundle"
+    assert config.gradient_accumulation == 2
     assert config.action_contrast_weight == pytest.approx(0)
     assert config.pixel_action_contrast_weight == pytest.approx(0.5)
 
@@ -316,6 +347,39 @@ def test_matched_pixel_action_loss_rejects_shape_mismatch() -> None:
             predicted_rgba=target[:1],
             target_rgba=target,
         )
+
+
+def test_matched_pixel_action_bundle_loss_rewards_six_way_exact_mapping() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((6, 1, 4, 3, 3))
+    for index in range(6):
+        row, column = divmod(index, 3)
+        target[index, :, index % 3, row, column] = 1
+        target[index, :, 3, row, column] = 1
+    collapsed_prediction = target[:1].expand_as(target).clone().requires_grad_(True)
+
+    exact = _matched_pixel_action_bundle_loss(torch, predicted_rgba=target, target_rgba=target)
+    collapsed = _matched_pixel_action_bundle_loss(
+        torch, predicted_rgba=collapsed_prediction, target_rgba=target
+    )
+    permuted = _matched_pixel_action_bundle_loss(
+        torch, predicted_rgba=torch.roll(target, 1, 0), target_rgba=target
+    )
+
+    assert exact.item() == pytest.approx(0)
+    assert collapsed.item() > exact.item()
+    assert permuted.item() > collapsed.item()
+    collapsed.backward()
+    assert collapsed_prediction.grad is not None
+    assert torch.isfinite(collapsed_prediction.grad).all()
+
+
+def test_matched_pixel_action_bundle_loss_rejects_pair_shape() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 1, 4, 2, 2))
+
+    with pytest.raises(ValueError, match="B>=3"):
+        _matched_pixel_action_bundle_loss(torch, predicted_rgba=target, target_rgba=target)
 
 
 def test_paired_appearance_metrics_separate_sprite_and_canvas_error() -> None:
