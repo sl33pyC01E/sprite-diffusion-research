@@ -52,6 +52,8 @@ class LatentStillTrainingConfig:
     log_every: int = 25
     validate_every: int = 500
     checkpoint_every: int = 5_000
+    recovery_checkpoint_every: int | None = None
+    recovery_checkpoint_slots: int = 2
     validation_rows: int = 32
     seed: int = 20260818
     device: str = "cuda"
@@ -66,11 +68,18 @@ class LatentStillTrainingConfig:
             "log_every",
             "validate_every",
             "checkpoint_every",
+            "recovery_checkpoint_slots",
             "validation_rows",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        if self.recovery_checkpoint_every is not None and (
+            isinstance(self.recovery_checkpoint_every, bool)
+            or not isinstance(self.recovery_checkpoint_every, int)
+            or self.recovery_checkpoint_every <= 0
+        ):
+            raise ValueError("recovery_checkpoint_every must be null or a positive integer")
         if isinstance(self.warmup_steps, bool) or not isinstance(self.warmup_steps, int):
             raise ValueError("warmup_steps must be an integer")
         if not 0 <= self.warmup_steps < self.steps:
@@ -609,7 +618,8 @@ def _train(
             history.write(json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n")
             history.flush()
             os.fsync(history.fileno())
-        if step % config.checkpoint_every == 0 or step == config.steps:
+        permanent_checkpoint = step % config.checkpoint_every == 0 or step == config.steps
+        if permanent_checkpoint:
             _write_training_checkpoint(
                 runtime,
                 output / f"training-step-{step:07d}.pt",
@@ -624,6 +634,29 @@ def _train(
                 dropout_generator=dropout_generator,
                 device=device,
                 disk_guard=disk_guard,
+            )
+        elif (
+            config.recovery_checkpoint_every is not None
+            and step % config.recovery_checkpoint_every == 0
+        ):
+            recovery_index = (
+                (step // config.recovery_checkpoint_every - 1) % config.recovery_checkpoint_slots
+            ) + 1
+            _write_training_checkpoint(
+                runtime,
+                output / f"recovery-slot-{recovery_index}.pt",
+                corpus=corpus,
+                config=config,
+                step=step,
+                model=model,
+                ema=ema,
+                optimizer=optimizer,
+                sampler_generator=sampler_generator,
+                flow_generator=flow_generator,
+                dropout_generator=dropout_generator,
+                device=device,
+                disk_guard=disk_guard,
+                replace_existing=True,
             )
     final_checkpoint = output / f"training-step-{config.steps:07d}.pt"
     inference_checkpoint = output / "checkpoint-ema.pt"
@@ -785,8 +818,10 @@ def _write_training_checkpoint(
     dropout_generator: Any,
     device: Any,
     disk_guard: DiskGuard,
+    replace_existing: bool = False,
 ) -> None:
-    _atomic_torch_save(
+    writer = _atomic_torch_replace if replace_existing else _atomic_torch_save
+    writer(
         runtime,
         path,
         {
@@ -1021,6 +1056,29 @@ def _atomic_torch_save(
     try:
         runtime.save(payload, temporary)
         os.rename(temporary, path)
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+
+def _atomic_torch_replace(
+    runtime: Any,
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    disk_guard: DiskGuard,
+) -> None:
+    """Atomically rotate a bounded recovery slot without risking the old slot."""
+
+    disk_guard.require_capacity(3 * 1024**3, label=path.name)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".pt", delete=False) as handle:
+        temporary = Path(handle.name)
+    try:
+        runtime.save(payload, temporary)
+        with temporary.open("r+b") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
     except BaseException:
         if temporary.exists():
             temporary.unlink()

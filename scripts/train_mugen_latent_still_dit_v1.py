@@ -40,6 +40,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--gradient-accumulation", type=int)
+    parser.add_argument("--checkpoint-every", type=int)
+    parser.add_argument("--recovery-checkpoint-every", type=int)
+    parser.add_argument("--recovery-checkpoint-slots", type=int)
     args = parser.parse_args()
     if (args.resume_checkpoint is None) != (args.expected_resume_sha256 is None):
         raise ValueError("resume checkpoint and expected SHA-256 must be provided together")
@@ -63,6 +66,9 @@ def main() -> None:
         for key, value in (
             ("batch_size", args.batch_size),
             ("gradient_accumulation", args.gradient_accumulation),
+            ("checkpoint_every", args.checkpoint_every),
+            ("recovery_checkpoint_every", args.recovery_checkpoint_every),
+            ("recovery_checkpoint_slots", args.recovery_checkpoint_slots),
         )
         if value is not None
     }

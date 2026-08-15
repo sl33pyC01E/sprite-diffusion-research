@@ -110,6 +110,8 @@ def test_training_config_validates_schedule_and_small_model() -> None:
     assert config.steps == 4
     with pytest.raises(ValueError, match="warmup_steps"):
         LatentStillTrainingConfig(steps=4, warmup_steps=4)
+    with pytest.raises(ValueError, match="recovery_checkpoint_every"):
+        LatentStillTrainingConfig(recovery_checkpoint_every=0)
 
 
 def _array_sha256(value: np.ndarray) -> str:
@@ -255,7 +257,9 @@ def test_corpus_loader_verifies_plan_latent_and_text_closure(tmp_path) -> None:
             gradient_accumulation=1,
             steps=2,
             warmup_steps=1,
-            checkpoint_every=1,
+            checkpoint_every=2,
+            recovery_checkpoint_every=1,
+            recovery_checkpoint_slots=2,
             validate_every=1,
             log_every=1,
             validation_rows=1,
@@ -276,7 +280,7 @@ def test_corpus_loader_verifies_plan_latent_and_text_closure(tmp_path) -> None:
         ),
     )
     warmup_checkpoint = torch.load(
-        result.output_directory / "training-step-0000001.pt",
+        result.output_directory / "recovery-slot-1.pt",
         map_location="cpu",
         weights_only=True,
     )
@@ -289,6 +293,7 @@ def test_corpus_loader_verifies_plan_latent_and_text_closure(tmp_path) -> None:
         torch.equal(warmup_checkpoint["raw_model"][key], value)
         for key, value in warmup_checkpoint["ema_model"].items()
     )
+    assert warmup_checkpoint["step"] == 1
     checkpoint = torch.load(result.training_checkpoint_path, map_location="cpu", weights_only=True)
     assert checkpoint["step"] == 2
     assert result.report_path.is_file()
