@@ -16,6 +16,7 @@ from spritelab.latent_motion_train import (
     _matched_action_contrast_loss,
     _paired_action_metrics,
     _paired_appearance_metrics,
+    _paired_temporal_motion_metrics,
     _sample_motion_residual,
     _sample_target_distinct_pair,
     _sample_training_times,
@@ -269,6 +270,35 @@ def test_paired_appearance_metrics_reject_shape_mismatch() -> None:
 
     with pytest.raises(ValueError, match="share one shape"):
         _paired_appearance_metrics(
+            torch,
+            predicted_pm=target[:1],
+            target_pm=target,
+        )
+
+
+def test_paired_temporal_motion_metrics_expose_static_collapse() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 3, 4, 2, 2))
+    target[:, 1] = 1
+    predicted = target * 0.25
+
+    metrics = _paired_temporal_motion_metrics(
+        torch,
+        predicted_pm=predicted,
+        target_pm=target,
+    )
+
+    assert metrics["target_temporal_magnitude"].item() == pytest.approx(1)
+    assert metrics["generated_temporal_magnitude"].item() == pytest.approx(0.25)
+    assert metrics["temporal_motion_ratio"].item() == pytest.approx(0.25)
+
+
+def test_paired_temporal_motion_metrics_reject_shape_mismatch() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 2, 4, 2, 2))
+
+    with pytest.raises(ValueError, match="share one shape"):
+        _paired_temporal_motion_metrics(
             torch,
             predicted_pm=target[:1],
             target_pm=target,

@@ -1473,6 +1473,11 @@ def _validate(
                 predicted_pm=predicted_pm,
                 target_pm=target_pm,
             )
+            motion = _paired_temporal_motion_metrics(
+                runtime,
+                predicted_pm=predicted_pm,
+                target_pm=target_pm,
+            )
             temporal = runtime.nn.functional.l1_loss(
                 predicted_pm[:, 1:] - predicted_pm[:, :-1],
                 target_pm[:, 1:] - target_pm[:, :-1],
@@ -1484,7 +1489,7 @@ def _validate(
             )
             totals["temporal_delta_mae"] += float(temporal.cpu())
             totals["decoder_reconstruction_loss"] += float(reconstruction.total.cpu())
-            for key, value in {**causal, **appearance}.items():
+            for key, value in {**causal, **appearance, **motion}.items():
                 totals[key] += float(value.cpu())
             for offset, row_index in enumerate(pair):
                 verb = corpus.rows[row_index].verb
@@ -1492,6 +1497,12 @@ def _validate(
                     runtime.nn.functional.l1_loss(predicted_pm[offset], target_pm[offset]).cpu()
                 )
                 verb_counts[verb] += 1
+                predicted_delta = predicted_pm[offset, 1:] - predicted_pm[offset, :-1]
+                target_delta = target_pm[offset, 1:] - target_pm[offset, :-1]
+                generated_motion = predicted_delta.abs().mean()
+                target_motion = target_delta.abs().mean()
+                totals[f"verb_{verb}_generated_temporal_magnitude"] += float(generated_motion.cpu())
+                totals[f"verb_{verb}_target_temporal_magnitude"] += float(target_motion.cpu())
     model.train()
     count = len(selection)
     output = {key: value / count for key, value in totals.items()}
@@ -1500,6 +1511,13 @@ def _validate(
     )
     for verb in sorted(verb_totals, key=str.encode):
         output[f"verb_{verb}_premultiplied_rgba_mae"] = verb_totals[verb] / verb_counts[verb]
+        generated_key = f"verb_{verb}_generated_temporal_magnitude"
+        target_key = f"verb_{verb}_target_temporal_magnitude"
+        generated_motion = totals[generated_key] / verb_counts[verb]
+        target_motion = totals[target_key] / verb_counts[verb]
+        output[generated_key] = generated_motion
+        output[target_key] = target_motion
+        output[f"verb_{verb}_temporal_motion_ratio"] = generated_motion / max(target_motion, 1e-8)
     return output
 
 
@@ -1603,6 +1621,30 @@ def _paired_appearance_metrics(
             background_error.mean() if background_error.numel() else zero
         ),
         "foreground_occupancy_ratio": predicted_count / target_count.clamp_min(1),
+    }
+
+
+def _paired_temporal_motion_metrics(
+    runtime: Any,
+    *,
+    predicted_pm: Any,
+    target_pm: Any,
+) -> dict[str, Any]:
+    """Expose motion collapse separately from frame reconstruction error."""
+
+    expected = tuple(target_pm.shape)
+    if len(expected) != 5 or expected[0] != 2 or expected[1] < 2:
+        raise ValueError("paired temporal tensors must have shape [2,T>=2,C,H,W]")
+    if tuple(predicted_pm.shape) != expected:
+        raise ValueError("paired temporal tensors must share one shape")
+    predicted_delta = predicted_pm[:, 1:] - predicted_pm[:, :-1]
+    target_delta = target_pm[:, 1:] - target_pm[:, :-1]
+    generated_magnitude = predicted_delta.abs().mean()
+    target_magnitude = target_delta.abs().mean()
+    return {
+        "generated_temporal_magnitude": generated_magnitude,
+        "target_temporal_magnitude": target_magnitude,
+        "temporal_motion_ratio": generated_magnitude / target_magnitude.clamp_min(1e-8),
     }
 
 
