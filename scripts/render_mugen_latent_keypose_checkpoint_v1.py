@@ -99,6 +99,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--expected-checkpoint-sha256", required=True)
     parser.add_argument("--selection-report", type=Path, required=True)
+    parser.add_argument("--state", choices=("ema", "raw"), default="ema")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -132,7 +133,8 @@ def main() -> None:
         raise ValueError("checkpoint action vocabulary differs")
 
     model = _build_keypose_model(config, len(corpus.action_vocabulary)).cpu().eval()
-    model.load_state_dict(checkpoint["ema_model"], strict=True)
+    state_key = "ema_model" if args.state == "ema" else "raw_model"
+    model.load_state_dict(checkpoint[state_key], strict=True)
     decoder = _load_frozen_decoder(torch, corpus, device=torch.device("cpu")).eval()
     mean = torch.tensor(corpus.channel_mean).view(1, 8, 1, 1)
     std = torch.tensor(corpus.channel_standard_deviation).view(1, 8, 1, 1)
@@ -215,6 +217,7 @@ def main() -> None:
             "and identity-disjoint validation examples"
         ),
         "config": asdict(config),
+        "model_state": args.state,
         "rows": report_rows,
         "schema_version": 1,
         "seed_contract": seed_contract,
