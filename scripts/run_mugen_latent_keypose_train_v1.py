@@ -39,6 +39,7 @@ def main() -> None:
             "direct30000",
             "identity-unet-direct30000",
             "identity-unet-flow30000",
+            "identity-unet-flow-smoke",
         ),
         default="direct30000",
     )
@@ -51,7 +52,11 @@ def main() -> None:
     output = args.output.resolve()
     if output.exists():
         raise FileExistsError(f"Refusing to replace key-pose output: {output}")
-    flow_profile = args.profile == "identity-unet-flow30000"
+    flow_profile = args.profile in {
+        "identity-unet-flow30000",
+        "identity-unet-flow-smoke",
+    }
+    smoke_profile = args.profile == "identity-unet-flow-smoke"
     config = LatentKeyposeTrainingConfig(
         prediction_mode=(
             "continuous_flow"
@@ -62,12 +67,21 @@ def main() -> None:
         ),
         model_architecture=(
             "identity_unet"
-            if args.profile in {"identity-unet-direct30000", "identity-unet-flow30000"}
+            if args.profile
+            in {
+                "identity-unet-direct30000",
+                "identity-unet-flow30000",
+                "identity-unet-flow-smoke",
+            }
             else "dit"
         ),
-        checkpoint_every=10_000 if flow_profile else 2_500,
-        validate_every=1_000 if flow_profile else 500,
-        validation_identities=4 if flow_profile else 16,
+        steps=1 if smoke_profile else 30_000,
+        warmup_steps=0 if smoke_profile else 500,
+        gradient_accumulation=1 if smoke_profile else 2,
+        flow_sample_steps=2 if smoke_profile else 8,
+        checkpoint_every=1 if smoke_profile else 2_500,
+        validate_every=1 if smoke_profile else 1_000 if flow_profile else 500,
+        validation_identities=1 if smoke_profile else 4 if flow_profile else 16,
     )
     corpus = load_latent_motion_training_corpus(
         args.manifest, verify_hashes=True, array_loading="lazy"
