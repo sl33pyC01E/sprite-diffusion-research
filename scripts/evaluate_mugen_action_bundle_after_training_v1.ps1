@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory = $true)]
-    [int]$WaitForProcessId
+    [int]$WaitForProcessId,
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$RunName
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,11 +11,10 @@ $root = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
 $manifest = Join-Path $root `
     'data\processed\mugen-six-action-dense-coverage-all-scales-motion-v1\training-manifest.json'
-$runName = 'mugen-six-action-dense-latent-motion-endpoint-pixel-action-bundle-from-step10000-v2-step3000'
-$run = Join-Path (Join-Path $root 'data\experiments') $runName
+$run = Join-Path (Join-Path $root 'data\experiments') $RunName
 $checkpoint = Join-Path $run 'checkpoint-ema.pt'
 $trainingReport = Join-Path $run 'training-report.json'
-$outputName = "$runName-gate-eval-v1"
+$outputName = "$RunName-gate-eval-v1"
 $output = Join-Path (Join-Path $root 'data\inference') $outputName
 $reports = Join-Path $root 'data\index\reports'
 $stdout = Join-Path $reports "$outputName.out.log"
