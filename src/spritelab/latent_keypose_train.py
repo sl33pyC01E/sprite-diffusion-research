@@ -42,7 +42,7 @@ else:
     _TORCH_IMPORT_ERROR = None
 
 Precision = Literal["float32", "bfloat16"]
-KeyposePredictionMode = Literal["endpoint_flow", "direct_residual"]
+KeyposePredictionMode = Literal["endpoint_flow", "direct_residual", "continuous_flow"]
 KeyposeModelArchitecture = Literal["dit", "identity_unet"]
 
 
@@ -73,6 +73,7 @@ class LatentKeyposeTrainingConfig:
     validate_every: int = 500
     checkpoint_every: int = 2_500
     validation_identities: int = 16
+    flow_sample_steps: int = 8
     seed: int = 20260830
     device: str = "cuda"
     precision: Precision = "bfloat16"
@@ -99,6 +100,7 @@ class LatentKeyposeTrainingConfig:
             "validate_every",
             "checkpoint_every",
             "validation_identities",
+            "flow_sample_steps",
             "seed",
         ):
             value = getattr(self, name)
@@ -114,6 +116,7 @@ class LatentKeyposeTrainingConfig:
             "validate_every",
             "checkpoint_every",
             "validation_identities",
+            "flow_sample_steps",
             "seed",
         ):
             if getattr(self, name) <= 0:
@@ -152,8 +155,14 @@ class LatentKeyposeTrainingConfig:
             raise ValueError("device must be cpu or cuda")
         if self.precision not in {"float32", "bfloat16"}:
             raise ValueError("precision must be float32 or bfloat16")
-        if self.prediction_mode not in {"endpoint_flow", "direct_residual"}:
-            raise ValueError("prediction_mode must be endpoint_flow or direct_residual")
+        if self.prediction_mode not in {
+            "endpoint_flow",
+            "direct_residual",
+            "continuous_flow",
+        }:
+            raise ValueError(
+                "prediction_mode must be endpoint_flow, direct_residual, or continuous_flow"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +296,7 @@ def _keypose_prediction_contract(
     clean_residual: Any,
     noise: Any,
     prediction_mode: KeyposePredictionMode,
+    times: Any | None = None,
 ) -> tuple[Any, Any]:
     """Return model input and supervised prediction for one key-pose mode."""
 
@@ -296,7 +306,58 @@ def _keypose_prediction_contract(
         return noise, noise - clean_residual
     if prediction_mode == "direct_residual":
         return runtime.zeros_like(clean_residual), -clean_residual
-    raise ValueError("prediction_mode must be endpoint_flow or direct_residual")
+    if prediction_mode == "continuous_flow":
+        if times is None or tuple(times.shape) != (clean_residual.shape[0],):
+            raise ValueError("continuous flow times must have shape [B]")
+        time = times.reshape((clean_residual.shape[0],) + (1,) * (clean_residual.ndim - 1))
+        return (1 - time) * clean_residual + time * noise, noise - clean_residual
+    raise ValueError("prediction_mode must be endpoint_flow, direct_residual, or continuous_flow")
+
+
+def sample_keypose_flow_residual(
+    runtime: Any,
+    model: Any,
+    *,
+    noise: Any,
+    reference: Any,
+    actions: Any,
+    phases: Any,
+    steps: int,
+) -> Any:
+    """Integrate a continuous key-pose flow from noise at t=1 to residual at t=0."""
+
+    if isinstance(steps, bool) or not isinstance(steps, int) or steps <= 0:
+        raise ValueError("key-pose flow steps must be a positive integer")
+    if noise.ndim != 4 or tuple(reference.shape) != tuple(noise.shape):
+        raise ValueError("key-pose flow noise/reference must share [B,C,H,W] geometry")
+    if tuple(actions.shape) != (noise.shape[0],):
+        raise ValueError("key-pose flow actions must have shape [B]")
+    if tuple(phases.shape) != (noise.shape[0], 1):
+        raise ValueError("key-pose flow phases must have shape [B,1]")
+    state = noise
+    schedule = runtime.linspace(1, 0, steps + 1, device=noise.device, dtype=runtime.float32)
+
+    def velocity(value: Any, time: Any) -> Any:
+        return model(
+            value.unsqueeze(1),
+            reference,
+            time.expand(value.shape[0]),
+            actions,
+            frame_phase=phases,
+        )[:, 0].float()
+
+    for index in range(steps):
+        current = schedule[index]
+        following = schedule[index + 1]
+        delta = following - current
+        first = velocity(state, current)
+        proposal = state + delta * first
+        if index + 1 == steps:
+            state = proposal
+        else:
+            second = velocity(proposal, following)
+            state = state + delta * (first + second) * 0.5
+    return state
 
 
 def _pixel_action_bundle_loss(runtime: Any, *, predicted_rgba: Any, target_rgba: Any) -> Any:
@@ -474,13 +535,19 @@ def _train(
             shared_noise = runtime.randn(
                 (1, *clean.shape[1:]), device=device, generator=noise_generator
             ).expand_as(clean)
+            if config.prediction_mode == "continuous_flow":
+                times = runtime.rand((1,), device=device, generator=noise_generator).expand(
+                    len(selection)
+                )
+            else:
+                times = runtime.ones((len(selection),), device=device)
             model_input, prediction_target = _keypose_prediction_contract(
                 runtime,
                 clean_residual=clean,
                 noise=shared_noise,
                 prediction_mode=config.prediction_mode,
+                times=times,
             )
-            times = runtime.ones((len(selection),), device=device)
             with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
                 predicted = model(
                     model_input.unsqueeze(1),
@@ -492,7 +559,11 @@ def _train(
                 latent_loss = runtime.nn.functional.mse_loss(
                     predicted.float(), prediction_target.float()
                 )
-                generated_residual = model_input - predicted
+                if config.prediction_mode == "continuous_flow":
+                    time = times.reshape(len(selection), 1, 1, 1)
+                    generated_residual = model_input - time * predicted
+                else:
+                    generated_residual = model_input - predicted
                 generated_latent = (reference + generated_residual) * std + mean
                 logits = decoder.decode_logits(generated_latent)
                 pixel_loss = sprite_reconstruction_loss(logits, target_rgba).total
@@ -627,31 +698,69 @@ def _validate(
             noise = runtime.randn(
                 (1, *clean.shape[1:]), device=device, generator=generator
             ).expand_as(clean)
-            model_input, prediction_target = _keypose_prediction_contract(
-                runtime,
-                clean_residual=clean,
-                noise=noise,
-                prediction_mode=config.prediction_mode,
-            )
-            times = runtime.ones((len(selection),), device=device)
             with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
-                velocity = model(
-                    model_input.unsqueeze(1),
-                    reference,
-                    times,
-                    actions,
-                    frame_phase=phases,
-                )[:, 0]
                 shifted_actions = runtime.roll(actions, 1)
-                shifted_velocity = model(
-                    model_input.unsqueeze(1),
-                    reference,
-                    times,
-                    shifted_actions,
-                    frame_phase=phases,
-                )[:, 0]
-                generated = (reference + model_input - velocity) * std + mean
-                shifted = (reference + model_input - shifted_velocity) * std + mean
+                if config.prediction_mode == "continuous_flow":
+                    generated_residual = sample_keypose_flow_residual(
+                        runtime,
+                        model,
+                        noise=noise,
+                        reference=reference,
+                        actions=actions,
+                        phases=phases,
+                        steps=config.flow_sample_steps,
+                    )
+                    shifted_residual = sample_keypose_flow_residual(
+                        runtime,
+                        model,
+                        noise=noise,
+                        reference=reference,
+                        actions=shifted_actions,
+                        phases=phases,
+                        steps=config.flow_sample_steps,
+                    )
+                    endpoint_times = runtime.ones((len(selection),), device=device)
+                    velocity = model(
+                        noise.unsqueeze(1),
+                        reference,
+                        endpoint_times,
+                        actions,
+                        frame_phase=phases,
+                    )[:, 0]
+                    shifted_velocity = model(
+                        noise.unsqueeze(1),
+                        reference,
+                        endpoint_times,
+                        shifted_actions,
+                        frame_phase=phases,
+                    )[:, 0]
+                    prediction_target = noise - clean
+                else:
+                    model_input, prediction_target = _keypose_prediction_contract(
+                        runtime,
+                        clean_residual=clean,
+                        noise=noise,
+                        prediction_mode=config.prediction_mode,
+                    )
+                    endpoint_times = runtime.ones((len(selection),), device=device)
+                    velocity = model(
+                        model_input.unsqueeze(1),
+                        reference,
+                        endpoint_times,
+                        actions,
+                        frame_phase=phases,
+                    )[:, 0]
+                    shifted_velocity = model(
+                        model_input.unsqueeze(1),
+                        reference,
+                        endpoint_times,
+                        shifted_actions,
+                        frame_phase=phases,
+                    )[:, 0]
+                    generated_residual = model_input - velocity
+                    shifted_residual = model_input - shifted_velocity
+                generated = (reference + generated_residual) * std + mean
+                shifted = (reference + shifted_residual) * std + mean
                 decoded = runtime.sigmoid(decoder.decode_logits(generated)).reshape(
                     len(selection), 1, 4, 128, 128
                 )

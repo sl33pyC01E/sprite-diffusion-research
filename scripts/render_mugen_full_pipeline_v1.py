@@ -23,9 +23,11 @@ from spritelab.anchored_motion_train import (  # noqa: E402
     AnchoredMotionTrainingConfig,
     sample_anchored_motion_residual,
 )
+from spritelab.evaluation import compare_matched_sequences  # noqa: E402
 from spritelab.latent_keypose_train import (  # noqa: E402
     LatentKeyposeTrainingConfig,
     _build_keypose_model,
+    sample_keypose_flow_residual,
 )
 from spritelab.latent_motion_train import (  # noqa: E402
     _load_frozen_decoder,
@@ -144,6 +146,45 @@ def _save_pose(value: np.ndarray, path: Path) -> dict[str, object]:
     return {"file_sha256": _file_sha256(path), "path": path.name}
 
 
+def _array_sha256(value: np.ndarray) -> str:
+    contiguous = np.ascontiguousarray(value)
+    header = (
+        f"{contiguous.dtype.str}\0{'x'.join(str(item) for item in contiguous.shape)}\0"
+    ).encode()
+    return hashlib.sha256(header + contiguous.tobytes(order="C")).hexdigest()
+
+
+def _save_array(value: np.ndarray, path: Path) -> dict[str, object]:
+    contiguous = np.ascontiguousarray(value)
+    buffer = io.BytesIO()
+    np.save(buffer, contiguous, allow_pickle=False)
+    payload = buffer.getvalue()
+    with path.open("xb") as handle:
+        handle.write(payload)
+    return {
+        "array_content_sha256": _array_sha256(contiguous),
+        "file_sha256": hashlib.sha256(payload).hexdigest(),
+        "path": path.name,
+        "shape": list(contiguous.shape),
+    }
+
+
+def _matched_metrics(
+    generated: np.ndarray, target: np.ndarray, *, loop_mode: str
+) -> dict[str, object]:
+    if generated.shape != target.shape or generated.dtype != np.uint8 or target.dtype != np.uint8:
+        raise ValueError("matched metric arrays must share uint8 RGBA geometry")
+    generated_frames = generated[None] if generated.ndim == 3 else generated
+    target_frames = target[None] if target.ndim == 3 else target
+    result = compare_matched_sequences(
+        [Image.fromarray(frame) for frame in generated_frames],
+        [Image.fromarray(frame) for frame in target_frames],
+        loop_mode=loop_mode,
+        alpha_threshold=127,
+    )
+    return asdict(result)
+
+
 def _rgba_uint8(value: torch.Tensor) -> np.ndarray:
     return (
         value.detach()
@@ -187,6 +228,12 @@ def main() -> None:
     parser.add_argument("--verb", action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=20260903)
+    parser.add_argument(
+        "--transparent-rgb-mode",
+        choices=("preserve", "zero"),
+        default="preserve",
+        help="Whether fully transparent Stage-1 RGB is preserved or zeroed before Stage 2.",
+    )
     args = parser.parse_args()
 
     identities = tuple(dict.fromkeys(args.identity))
@@ -265,8 +312,13 @@ def main() -> None:
 
     device = torch.device("cuda")
     decoder = _load_frozen_decoder(torch, corpus, device=device).eval()
+    encoded_stills = np.stack(generated_stills)
+    if args.transparent_rgb_mode == "zero":
+        encoded_stills = encoded_stills.copy()
+        transparent = encoded_stills[..., 3] == 0
+        encoded_stills[..., :3][transparent] = 0
     still_tensor = (
-        torch.from_numpy(np.stack(generated_stills))
+        torch.from_numpy(encoded_stills)
         .to(device=device, dtype=torch.float32)
         .permute(0, 3, 1, 2)
         .div(255)
@@ -293,17 +345,33 @@ def main() -> None:
     keypose_model = _build_keypose_model(keypose_config, len(corpus.action_vocabulary)).to(device)
     keypose_model.load_state_dict(keypose_payload["raw_model"], strict=True)
     keypose_model.eval()
-    keypose_input = torch.zeros_like(references).unsqueeze(1)
     keypose_phase = torch.full((len(selections), 1), 0.5, device=device)
     with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        keypose_velocity = keypose_model(
-            keypose_input,
-            references,
-            torch.ones((len(selections),), device=device),
-            action_indices,
-            frame_phase=keypose_phase,
-        )[:, 0]
-    keypose_residual = -keypose_velocity.float()
+        if keypose_config.prediction_mode == "continuous_flow":
+            keypose_generator = torch.Generator(device="cpu").manual_seed(args.seed + 2)
+            identity_keypose_noise = torch.randn(
+                (len(identities), 8, 64, 64), generator=keypose_generator
+            )
+            keypose_noise = identity_keypose_noise.repeat_interleave(len(verbs), dim=0).to(device)
+            keypose_residual = sample_keypose_flow_residual(
+                torch,
+                keypose_model,
+                noise=keypose_noise,
+                reference=references,
+                actions=action_indices,
+                phases=keypose_phase,
+                steps=keypose_config.flow_sample_steps,
+            )
+        else:
+            keypose_input = torch.zeros_like(references).unsqueeze(1)
+            keypose_velocity = keypose_model(
+                keypose_input,
+                references,
+                torch.ones((len(selections),), device=device),
+                action_indices,
+                frame_phase=keypose_phase,
+            )[:, 0]
+            keypose_residual = -keypose_velocity.float()
     keypose_latent = (references + keypose_residual) * std + mean
     with torch.no_grad():
         keypose_rgba = decoder.decode(keypose_latent)
@@ -376,6 +444,8 @@ def main() -> None:
         target_path = output / f"{identity_stem}-stage1-target.png"
         stage1_target_preview = _save_pose(stage1_target, target_path)
         sample = json.loads(stage1_report_path.read_bytes())["samples"][identity_index]
+        stage1_generated = generated_stills[identity_index]
+        stage1_metrics = _matched_metrics(stage1_generated, stage1_target, loop_mode="one_shot")
         action_rows = []
         for verb_index, verb in enumerate(verbs):
             flat = identity_index * len(verbs) + verb_index
@@ -384,8 +454,27 @@ def main() -> None:
             stage2_path = output / f"{identity_stem}-{verb}-stage2-keypose.png"
             stage2_preview = _save_pose(keypose_arrays[flat], stage2_path)
             stage2_target_path = output / f"{identity_stem}-{verb}-stage2-target.png"
-            stage2_target = _save_pose(
-                np.ascontiguousarray(corpus.target_rgba[row_index][4]), stage2_target_path
+            stage2_target_array = np.ascontiguousarray(corpus.target_rgba[row_index][4])
+            stage2_target = _save_pose(stage2_target_array, stage2_target_path)
+            stage2_generated_array = _save_array(
+                keypose_arrays[flat],
+                output / f"{identity_stem}-{verb}-stage2-keypose.npy",
+            )
+            stage2_target_array_evidence = _save_array(
+                stage2_target_array,
+                output / f"{identity_stem}-{verb}-stage2-target.npy",
+            )
+            stage2_metrics = _matched_metrics(
+                keypose_arrays[flat], stage2_target_array, loop_mode="one_shot"
+            )
+            stage3_generated_array = _save_array(
+                video_arrays[flat],
+                output / f"{identity_stem}-{verb}-stage3-animation.npy",
+            )
+            stage3_target_array = np.ascontiguousarray(corpus.target_rgba[row_index])
+            stage3_target_array_evidence = _save_array(
+                stage3_target_array,
+                output / f"{identity_stem}-{verb}-stage3-target.npy",
             )
             stage3_preview = export_rgba_clip_preview(
                 np.ascontiguousarray(video_arrays[flat]),
@@ -398,7 +487,7 @@ def main() -> None:
                 disk_guard=guard,
             )
             stage3_target = export_rgba_clip_preview(
-                np.ascontiguousarray(corpus.target_rgba[row_index]),
+                stage3_target_array,
                 output,
                 artifact_stem=f"{identity_stem}-{verb}-stage3-target",
                 duration_ms=source_row.duration_ms,
@@ -412,9 +501,17 @@ def main() -> None:
                     "sequence_id": source_row.sequence_id,
                     "verb": verb,
                     "stage2_generated": stage2_preview,
+                    "stage2_generated_array": stage2_generated_array,
+                    "stage2_metrics": stage2_metrics,
                     "stage2_target": stage2_target,
+                    "stage2_target_array": stage2_target_array_evidence,
                     "stage3_generated": _relative_json(asdict(stage3_preview), output),
+                    "stage3_generated_array": stage3_generated_array,
+                    "stage3_metrics": _matched_metrics(
+                        video_arrays[flat], stage3_target_array, loop_mode="loop"
+                    ),
                     "stage3_target": _relative_json(asdict(stage3_target), output),
+                    "stage3_target_array": stage3_target_array_evidence,
                 }
             )
         report_rows.append(
@@ -423,6 +520,7 @@ def main() -> None:
                 "prompt": record["prompt"],
                 "split": "train",
                 "stage1_generated": sample,
+                "stage1_metrics": stage1_metrics,
                 "stage1_target": stage1_target_preview,
                 "actions": action_rows,
             }
@@ -439,8 +537,11 @@ def main() -> None:
             "verbs": list(verbs),
             "stage1": {"guidance_scale": 3.5, "sample_steps": 32},
             "stage2_state": "raw",
+            "stage2_prediction_mode": keypose_config.prediction_mode,
+            "stage2_flow_sample_steps": keypose_config.flow_sample_steps,
             "stage3_state": "ema",
             "shared_noise_across_verbs_per_identity": True,
+            "transparent_rgb_mode_before_stage2": args.transparent_rgb_mode,
         },
         "evidence": {
             "stage1_checkpoint_sha256": args.expected_stage1_checkpoint_sha256,

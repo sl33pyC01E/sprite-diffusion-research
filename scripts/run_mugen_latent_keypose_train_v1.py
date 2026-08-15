@@ -34,7 +34,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--profile",
-        choices=("endpoint30000", "direct30000", "identity-unet-direct30000"),
+        choices=(
+            "endpoint30000",
+            "direct30000",
+            "identity-unet-direct30000",
+            "identity-unet-flow30000",
+        ),
         default="direct30000",
     )
     parser.add_argument("--resume-checkpoint", type=Path)
@@ -46,11 +51,23 @@ def main() -> None:
     output = args.output.resolve()
     if output.exists():
         raise FileExistsError(f"Refusing to replace key-pose output: {output}")
+    flow_profile = args.profile == "identity-unet-flow30000"
     config = LatentKeyposeTrainingConfig(
-        prediction_mode=("endpoint_flow" if args.profile == "endpoint30000" else "direct_residual"),
-        model_architecture=(
-            "identity_unet" if args.profile == "identity-unet-direct30000" else "dit"
+        prediction_mode=(
+            "continuous_flow"
+            if flow_profile
+            else "endpoint_flow"
+            if args.profile == "endpoint30000"
+            else "direct_residual"
         ),
+        model_architecture=(
+            "identity_unet"
+            if args.profile in {"identity-unet-direct30000", "identity-unet-flow30000"}
+            else "dit"
+        ),
+        checkpoint_every=10_000 if flow_profile else 2_500,
+        validate_every=1_000 if flow_profile else 500,
+        validation_identities=4 if flow_profile else 16,
     )
     corpus = load_latent_motion_training_corpus(
         args.manifest, verify_hashes=True, array_loading="lazy"

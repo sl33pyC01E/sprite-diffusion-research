@@ -13,6 +13,7 @@ from spritelab.latent_keypose_train import (
     _keypose_prediction_contract,
     _pixel_action_bundle_loss,
     build_keypose_action_bundles,
+    sample_keypose_flow_residual,
 )
 from spritelab.latent_motion_train import LatentMotionTrainingRow
 from spritelab.models.latent_keypose_unet import LatentKeyposeUNetConfig
@@ -67,6 +68,66 @@ def test_direct_keypose_contract_removes_unnecessary_noise_prediction() -> None:
     assert torch.equal(direct_input, torch.zeros_like(clean))
     assert torch.equal(direct_target, -clean)
     assert torch.equal(direct_input - direct_target, clean)
+
+
+def test_continuous_keypose_contract_recovers_clean_residual_at_any_time() -> None:
+    torch = pytest.importorskip("torch")
+    clean = torch.tensor(((1.0, 2.0), (3.0, 4.0)))
+    noise = torch.tensor(((5.0, 6.0), (7.0, 8.0)))
+    times = torch.tensor((0.25, 0.75))
+
+    model_input, target_velocity = _keypose_prediction_contract(
+        torch,
+        clean_residual=clean,
+        noise=noise,
+        prediction_mode="continuous_flow",
+        times=times,
+    )
+    reconstructed = model_input - times[:, None] * target_velocity
+
+    assert torch.allclose(target_velocity, noise - clean)
+    assert torch.allclose(reconstructed, clean)
+    with pytest.raises(ValueError, match="times must have shape"):
+        _keypose_prediction_contract(
+            torch,
+            clean_residual=clean,
+            noise=noise,
+            prediction_mode="continuous_flow",
+        )
+
+
+def test_continuous_keypose_sampler_integrates_oracle_velocity() -> None:
+    torch = pytest.importorskip("torch")
+    clean = torch.tensor([[[[1.0]]], [[[2.0]]]])
+    noise = torch.tensor([[[[5.0]]], [[[7.0]]]])
+    reference = torch.zeros_like(clean)
+    actions = torch.tensor((0, 1))
+    phases = torch.full((2, 1), 0.5)
+
+    class Oracle:
+        def __call__(
+            self,
+            video: object,
+            reference_value: object,
+            times: object,
+            action_indices: object,
+            *,
+            frame_phase: object,
+        ) -> object:
+            del reference_value, times, action_indices, frame_phase
+            return (noise - clean).unsqueeze(1).expand_as(video)
+
+    generated = sample_keypose_flow_residual(
+        torch,
+        Oracle(),
+        noise=noise,
+        reference=reference,
+        actions=actions,
+        phases=phases,
+        steps=4,
+    )
+
+    assert torch.allclose(generated, clean)
 
 
 def test_keypose_action_bundles_require_all_six_actions() -> None:

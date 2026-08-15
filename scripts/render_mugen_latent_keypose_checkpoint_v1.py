@@ -25,6 +25,7 @@ from spritelab.latent_keypose_train import (  # noqa: E402
     _keypose_prediction_contract,
     _validate,
     build_keypose_action_bundles,
+    sample_keypose_flow_residual,
 )
 from spritelab.latent_motion_train import (  # noqa: E402
     _load_frozen_decoder,
@@ -168,20 +169,32 @@ def main() -> None:
             clean = target - reference
             generator = torch.Generator(device="cpu").manual_seed(int(seed_contract[split]))
             noise = torch.randn((1, *clean.shape[1:]), generator=generator).expand_as(clean)
-            model_input, _ = _keypose_prediction_contract(
-                torch,
-                clean_residual=clean,
-                noise=noise,
-                prediction_mode=config.prediction_mode,
-            )
-            velocity = model(
-                model_input.unsqueeze(1),
-                reference,
-                torch.ones((len(selection),)),
-                actions,
-                frame_phase=phases,
-            )[:, 0]
-            generated_latent = (reference + model_input - velocity) * std + mean
+            if config.prediction_mode == "continuous_flow":
+                generated_residual = sample_keypose_flow_residual(
+                    torch,
+                    model,
+                    noise=noise,
+                    reference=reference,
+                    actions=actions,
+                    phases=phases,
+                    steps=config.flow_sample_steps,
+                )
+            else:
+                model_input, _ = _keypose_prediction_contract(
+                    torch,
+                    clean_residual=clean,
+                    noise=noise,
+                    prediction_mode=config.prediction_mode,
+                )
+                velocity = model(
+                    model_input.unsqueeze(1),
+                    reference,
+                    torch.ones((len(selection),)),
+                    actions,
+                    frame_phase=phases,
+                )[:, 0]
+                generated_residual = model_input - velocity
+            generated_latent = (reference + generated_residual) * std + mean
             generated_rgba = torch.sigmoid(decoder.decode_logits(generated_latent)).reshape(
                 len(selection), 1, 4, 128, 128
             )
