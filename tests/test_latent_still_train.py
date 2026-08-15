@@ -241,6 +241,9 @@ def test_corpus_loader_verifies_plan_latent_and_text_closure(tmp_path) -> None:
     assert corpus.train_indices == (0,)
     assert corpus.validation_indices == (1,)
     assert corpus.contract["train_identities"] == 1
+    assert corpus.resident_latents is not None
+    assert len(corpus.resident_latents) == 2
+    assert all(not value.flags.writeable for value in corpus.resident_latents)
 
     result = run_latent_still_training(
         plan_path,

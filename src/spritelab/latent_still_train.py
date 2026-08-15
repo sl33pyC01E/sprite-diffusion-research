@@ -121,6 +121,7 @@ class LatentStillCorpus:
     channel_mean: tuple[float, ...]
     channel_standard_deviation: tuple[float, ...]
     contract: dict[str, Any]
+    resident_latents: tuple[np.ndarray, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +259,7 @@ def load_latent_still_corpus(
 
     latent_root = latent_file.parent
     rows = []
+    resident_latents: list[np.ndarray] | None = [] if verify_latent_files else None
     for plan_record in sorted(plan_records, key=lambda item: str(item.get("sequence_id")).encode()):
         sequence_id = _required_text(plan_record, "sequence_id")
         identity_id = _required_text(plan_record, "identity_id")
@@ -319,8 +321,10 @@ def load_latent_still_corpus(
             latent_array_sha256=_required_text(latent_record, "array_content_sha256"),
             eligible_frame_indices=tuple(raw_eligible),
         )
-        if verify_latent_files:
-            _load_latent(row, verify_hashes=True)
+        if resident_latents is not None:
+            latent_value = _load_latent(row, verify_hashes=True)
+            latent_value.setflags(write=False)
+            resident_latents.append(latent_value)
         rows.append(row)
     train_indices = tuple(index for index, row in enumerate(rows) if row.split == "train")
     validation_indices = tuple(index for index, row in enumerate(rows) if row.split == "validation")
@@ -358,6 +362,7 @@ def load_latent_still_corpus(
         channel_mean=mean,
         channel_standard_deviation=std,
         contract=contract,
+        resident_latents=(tuple(resident_latents) if resident_latents is not None else None),
     )
 
 
@@ -699,7 +704,11 @@ def _training_batch(
     prompt_rows = []
     for row_index, frame_index in selection:
         row = corpus.rows[row_index]
-        latent_rows.append(_load_latent(row, verify_hashes=False)[frame_index])
+        if corpus.resident_latents is None:
+            latent = _load_latent(row, verify_hashes=False)
+        else:
+            latent = corpus.resident_latents[row_index]
+        latent_rows.append(latent[frame_index])
         prompt_rows.append(row.prompt_row)
     normalized = normalize_latents(
         np.stack(latent_rows), corpus.channel_mean, corpus.channel_standard_deviation
