@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from spritelab.mugen_still_dataset import compact_appearance_prompt
 from spritelab.storage import DiskGuard
 
 
@@ -32,6 +33,7 @@ def build_mugen_dense_still_training_plan(
         or any(not isinstance(row, dict) for row in sequences)
     ):
         raise ValueError("captioned materialization sequence count differs")
+    structured_by_identity, caption_source = _load_structured_captions(materialization, path)
     by_identity: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     seen_sequences = set()
     for sequence in sequences:
@@ -55,7 +57,22 @@ def build_mugen_dense_still_training_plan(
         if any(_text(row, "split") != split for row in identity_sequences):
             raise ValueError(f"identity sequences cross splits: {identity_id}")
         caption = _object(idle.get("caption"), "caption")
-        appearance = _text(caption, "description").rstrip(" .;")
+        structured = structured_by_identity.get(identity_id)
+        if structured is None:
+            appearance = _text(caption, "description").rstrip(" .;")
+            prompt_projection = "legacy_literal_description_v1"
+            prompt = (
+                f"{appearance}; full-body pixel art sprite; transparent background; "
+                "neutral side-view reference"
+            )
+        else:
+            appearance = compact_appearance_prompt(
+                structured,
+                entity_class=_text(idle, "entity_class"),
+                maximum_words=32,
+            )
+            prompt_projection = "structured_priority_whole_phrase_32_words_v1"
+            prompt = f"{appearance}; full body; neutral side view"
         reference_index = caption.get("reference_frame_index")
         if (
             isinstance(reference_index, bool)
@@ -74,10 +91,6 @@ def build_mugen_dense_still_training_plan(
                 raise ValueError(
                     f"identity caption/reference differs across actions: {identity_id}"
                 )
-        prompt = (
-            f"{appearance}; full-body pixel art sprite; transparent background; "
-            "neutral side-view reference"
-        )
         target = _object(idle.get("output"), "output")
         for key in ("array_content_sha256", "file_sha256"):
             _digest(target, key)
@@ -95,6 +108,7 @@ def build_mugen_dense_still_training_plan(
                 "entity_class": _text(idle, "entity_class"),
                 "identity_id": identity_id,
                 "prompt": prompt,
+                "prompt_projection": prompt_projection,
                 "sample_id": "still_reference_"
                 + hashlib.sha256(
                     f"mugen_canonical_still_v1\0{identity_id}\0{sequence_id}".encode()
@@ -124,6 +138,7 @@ def build_mugen_dense_still_training_plan(
             "eligible_training_frames": len(records) * 8,
             "identities": len(records),
             "prompts": len(prompts),
+            "sequences": len(records),
             "source_action_sequences": len(sequences),
             "split_identities": {
                 split: len(values) for split, values in sorted(identities_by_split.items())
@@ -139,11 +154,53 @@ def build_mugen_dense_still_training_plan(
             "one_target_clip_per_identity": True,
             "raw_sequence_frequency_is_not_sampling_weight": True,
         },
-        "schema_version": 5,
+        "schema_version": 6,
         "source": {
             "materialization_file_sha256": hashlib.sha256(payload).hexdigest(),
             "materialization_path": str(path),
+            **caption_source,
         },
+    }
+
+
+def _load_structured_captions(
+    materialization: dict[str, Any], materialization_path: Path
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Load the hash-bound VLM facts when the joined bridge exposes them."""
+
+    source = materialization.get("source")
+    if not isinstance(source, dict):
+        return {}, {}
+    raw_path = source.get("caption_manifest_path")
+    expected_sha256 = source.get("caption_manifest_file_sha256")
+    if raw_path is None and expected_sha256 is None:
+        return {}, {}
+    if not isinstance(raw_path, str) or not raw_path or not isinstance(expected_sha256, str):
+        raise ValueError("caption manifest source evidence is incomplete")
+    caption_path = Path(raw_path).resolve()
+    payload = caption_path.read_bytes()
+    actual_sha256 = hashlib.sha256(payload).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError("caption manifest source hash differs")
+    manifest = _object(json.loads(payload), "caption manifest")
+    rows = manifest.get("records")
+    if (
+        not isinstance(rows, list)
+        or manifest.get("record_count") != len(rows)
+        or any(not isinstance(row, dict) for row in rows)
+    ):
+        raise ValueError("caption manifest record count differs")
+    output: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        identity_id = _text(row, "identity_id")
+        structured = _object(row.get("structured_caption"), "structured caption")
+        if identity_id in output:
+            raise ValueError(f"duplicate structured caption identity: {identity_id}")
+        output[identity_id] = structured
+    return output, {
+        "caption_manifest_file_sha256": actual_sha256,
+        "caption_manifest_path": str(caption_path),
+        "prompt_projection": "structured_priority_whole_phrase_32_words_v1",
     }
 
 

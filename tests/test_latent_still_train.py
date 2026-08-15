@@ -11,6 +11,7 @@ import pytest
 from spritelab.latent_still_train import (
     LatentStillRow,
     LatentStillTrainingConfig,
+    _materialization_sources_compatible,
     build_hierarchical_sampler_index,
     load_latent_still_corpus,
     normalize_latents,
@@ -123,6 +124,31 @@ def _write_npy(path: Path, value: np.ndarray) -> tuple[str, str]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
     return hashlib.sha256(payload).hexdigest(), _array_sha256(value)
+
+
+def test_materialization_sources_accept_hash_verified_common_dense_ancestor(tmp_path) -> None:
+    dense_sha256 = "d" * 64
+    sources = []
+    for name in ("captioned", "autoencoder"):
+        path = tmp_path / f"{name}.json"
+        payload = json.dumps(
+            {
+                "artifact_kind": name,
+                "source": {"dense_manifest_file_sha256": dense_sha256},
+            },
+            sort_keys=True,
+        ).encode()
+        path.write_bytes(payload)
+        sources.append(
+            {
+                "materialization_file_sha256": hashlib.sha256(payload).hexdigest(),
+                "materialization_path": str(path),
+            }
+        )
+
+    assert _materialization_sources_compatible(*sources) == (
+        f"common_dense_manifest_sha256:{dense_sha256}"
+    )
 
 
 def test_corpus_loader_verifies_plan_latent_and_text_closure(tmp_path) -> None:

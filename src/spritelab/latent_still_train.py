@@ -238,9 +238,8 @@ def load_latent_still_corpus(
     latent_source = latent.get("source")
     if not isinstance(plan_source, dict) or not isinstance(latent_source, dict):
         raise LatentStillTrainingError("plan/latent source contracts are missing")
-    if plan_source.get("materialization_file_sha256") != latent_source.get(
-        "materialization_file_sha256"
-    ):
+    materialization_lineage = _materialization_sources_compatible(plan_source, latent_source)
+    if materialization_lineage is None:
         raise LatentStillTrainingError("plan and latent cache materializations differ")
     latent_by_id = _unique(latent_records, "sequence_id", "latent manifest")
     prompt_by_text = _unique(text_rows, "prompt", "text manifest")
@@ -340,6 +339,7 @@ def load_latent_still_corpus(
     )
     contract = {
         "latent_manifest_file_sha256": hashlib.sha256(latent_bytes).hexdigest(),
+        "materialization_lineage": materialization_lineage,
         "plan_file_sha256": plan_sha256,
         "record_count": len(rows),
         "text_manifest_file_sha256": hashlib.sha256(text_bytes).hexdigest(),
@@ -359,6 +359,46 @@ def load_latent_still_corpus(
         channel_standard_deviation=std,
         contract=contract,
     )
+
+
+def _materialization_sources_compatible(
+    plan_source: dict[str, Any], latent_source: dict[str, Any]
+) -> str | None:
+    """Prove direct identity or a common immutable dense-manifest ancestor."""
+
+    plan_sha256 = plan_source.get("materialization_file_sha256")
+    latent_sha256 = latent_source.get("materialization_file_sha256")
+    if isinstance(plan_sha256, str) and plan_sha256 == latent_sha256:
+        return "exact_materialization_file_sha256"
+    plan_dense = _dense_manifest_ancestor(plan_source, "plan")
+    latent_dense = _dense_manifest_ancestor(latent_source, "latent cache")
+    if plan_dense is not None and plan_dense == latent_dense:
+        return f"common_dense_manifest_sha256:{plan_dense}"
+    return None
+
+
+def _dense_manifest_ancestor(source: dict[str, Any], label: str) -> str | None:
+    path_value = source.get("materialization_path")
+    expected_sha256 = source.get("materialization_file_sha256")
+    if not isinstance(path_value, str) or not isinstance(expected_sha256, str):
+        return None
+    path = Path(path_value).resolve()
+    try:
+        payload = path.read_bytes()
+    except OSError as error:
+        raise LatentStillTrainingError(f"{label} source materialization is unreadable") from error
+    if hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise LatentStillTrainingError(f"{label} source materialization hash differs")
+    materialization = _json_object(payload, f"{label} source materialization")
+    ancestor_source = materialization.get("source")
+    if not isinstance(ancestor_source, dict):
+        return None
+    dense_sha256 = ancestor_source.get("dense_manifest_file_sha256")
+    if not isinstance(dense_sha256, str) or len(dense_sha256) != 64:
+        return None
+    if any(character not in "0123456789abcdef" for character in dense_sha256):
+        return None
+    return dense_sha256
 
 
 def run_latent_still_training(
