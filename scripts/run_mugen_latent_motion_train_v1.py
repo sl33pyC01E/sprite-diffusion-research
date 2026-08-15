@@ -129,6 +129,26 @@ def main(
         config = LatentMotionTrainingConfig(checkpoint_every=10_000)
         output_name = "mugen-six-action-dense-latent-motion-scratch-v1-step50000"
         warm_start = False
+    elif profile == "corpus50000-strong-actions":
+        config = LatentMotionTrainingConfig(
+            gradient_accumulation=2,
+            action_batch_mode="bundle",
+            action_conditioning_mode="expanded",
+            action_token_count=4,
+            action_condition_scale=2.0,
+            pixel_action_contrast_weight=0.5,
+            time_sampling="endpoint",
+            endpoint_sample_probability=0.0,
+            inference_steps=1,
+            sampler_algorithm="euler",
+            steps=50_000,
+            checkpoint_every=5_000,
+            validation_pairs=16,
+            preview_pairs=6,
+            seed=20260829,
+        )
+        output_name = "mugen-six-action-dense-latent-motion-strong-actions-v1-step50000"
+        warm_start = False
     else:
         raise ValueError(f"unsupported profile: {profile}")
     if profile in {"smoke", "pilot250"}:
@@ -193,6 +213,7 @@ if __name__ == "__main__":
             "flow-smoke",
             "flow8000",
             "corpus50000",
+            "corpus50000-strong-actions",
         ),
         default="smoke",
     )
