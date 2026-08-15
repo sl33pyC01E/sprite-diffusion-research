@@ -863,3 +863,64 @@ from step 10,000 toward the original 50,000-step budget. This is an undertrainin
 test on the dense corpus, not an architectural victory claim. A separately tested
 matched-action contrast loss remains disabled in the baseline so later comparisons
 can distinguish more training from a changed objective.
+
+## Dense six-action fixed-middle key-pose baseline
+
+The revised three-stage pipeline separates the canonical action pose from the
+trajectory. Stage two receives one exact reference latent and one of the six dense
+MUGEN actions, then directly regresses the normalized residual for fixed source frame
+four. It does not select or predict a per-clip peak index. All six actions for an
+identity share one optimizer bundle, four projected action tokens, per-frame action
+conditioning, and a target-directed pixel-space contrast loss.
+
+The scratch 59.8-million-parameter run completed 30,000 steps over 3,442 training
+identities. Its final checkpoint SHA-256 is
+`42edcf3d1955c7062e76496d3f4ec02a57d0c6e0a50e52ac67f6e44828d3a494` and its
+training-report SHA-256 is
+`75d290a3eb20c25b4f2babf916c18ce567c5059fd6f918dcad2a393d7c3143c7`.
+
+The broader deterministic evaluation covers 64 training and 64 identity-disjoint
+validation characters, with all six actions for every character. Raw weights reach
+`0.976562` correct-target preference and `0.819471` of authored action separation on
+training identities. On unseen identities they reach `0.283854` correct-target
+preference, versus a six-way chance rate of `0.166667`, and `0.644935` of authored
+action separation. The raw evaluation report SHA-256 is
+`d1d6d01183a23df491b57ba1edfbe8581d9e77b5c1898835f34e6f2e0b124858`.
+
+EMA is marginally better on unseen premultiplied-RGBA error (`0.040035`) and strict
+target preference (`0.286458`), while raw weights preserve more action magnitude.
+The EMA evaluation report SHA-256 is
+`6cdd61f24bd47dbd0250a6666510e22c5058ddd14744659f5da634d342914a04`.
+These results prove strong in-distribution verb learning but only partial transfer of
+the learned pose transformations to unseen bodies. They do not establish end-to-end
+text-conditioned generation.
+
+## Start/middle/start anchored-motion baseline
+
+Stage three receives exact reference latents at frames zero and seven plus the true
+fixed frame-four action latent. Only frames one through three and five through six are
+predicted. The loss and action metrics exclude all three anchors, and a signed
+target-directed transition objective gives a static trajectory zero progress credit.
+This initial run is therefore a teacher-forced trajectory test, not a predicted-keypose
+or complete-pipeline result.
+
+At step 2,500 the checkpoint SHA-256 is
+`452631586c28a249748d6272f94c002095fab64a9b468eb587595d4530b7c78c`.
+Eight identity-disjoint validation bundles reach `0.833333` correct-target preference,
+`0.954613` of authored action separation, premultiplied-RGBA MAE `0.015069`, and
+temporal magnitude `1.082932` times target. The selected visible EMA render report is
+`c72bff1414ad927573e59231400f0a1f1f791229d85a727a0368173c2f72fe2c`.
+
+At step 5,000 the checkpoint SHA-256 is
+`2e0107bb62e06aeb8d1728391fe3461f69f0e0bab4b6f6c07a73ba36f7280745`.
+The same eight validation bundles retain `0.833333` target preference while
+premultiplied-RGBA MAE improves to `0.012746`; action separation is `0.912202` of
+target and temporal magnitude is `0.925792` of target. The same-noise selected EMA
+render report SHA-256 is
+`5bc7cd9276b2579a6a8954a07132d962c70af89a5f500287bf77575efe86cfc8`.
+
+The fixed anchors are exact and the predicted trajectories already follow the requested
+actions, including on the selected unseen character. Intermediate frames remain visibly
+speckled and softer than the target. The run therefore passes an early trajectory and
+steering gate but not an asset-quality pixel gate; training continues under the original
+30,000-step schedule without changing its objective.
