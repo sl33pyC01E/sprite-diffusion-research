@@ -15,8 +15,7 @@ associated with these studies.
 
 The release has two purposes:
 
-- preserve the current compact three-stage MUGEN pipeline and its resumable Stage-1
-  state;
+- preserve the current compact three-stage MUGEN pipeline;
 - preserve one best or most informative checkpoint from each materially different
   architecture tested during the research.
 

@@ -63,13 +63,18 @@ identified sprites. These are memorization checks, not general generators.
 ### 2. Causal action tests: does the verb actually matter?
 
 TMWA Causal16 used matched noise and paired idle/walk examples so changing the
-action token was measurable. It improved from 1,000 to 2,000 steps, but remained an
-in-sample test. The broad semantic model then evaluated identity-disjoint characters:
-it learned rough action/shape cues but not production-quality identity detail.
+action token was measurable. The same Sasquatch walk request is shown at 1,000,
+2,000, and 6,000 steps. The broad semantic model then evaluated identity-disjoint
+characters: it learned rough action/shape cues but not production-quality identity
+detail.
 
-| Exact target | 1,000 steps | 2,000 steps | Broad held-out target | Broad held-out output |
-|---|---|---|---|---|
-| ![Skull Ice walk target](docs/media/studies/03-tmwa-causal-target-skull-ice-walk.png) | ![Skull Ice walk 1000](docs/media/studies/03-tmwa-causal-generated-1000.png) | ![Skull Ice walk 2000](docs/media/studies/03-tmwa-causal-generated-2000.png) | ![TMWA held-out attack target](docs/media/studies/04-tmwa-semantic-target-attack.png) | ![TMWA held-out attack generated](docs/media/studies/04-tmwa-semantic-generated-attack.png) |
+| Exact target | 1,000 steps | 2,000 steps | 6,000 steps |
+|---|---|---|---|
+| ![Sasquatch walk target](docs/media/studies/03-tmwa-causal-target-sasquatch-walk.png) | ![Sasquatch walk 1000](docs/media/studies/03-tmwa-causal-sasquatch-walk-1000.png) | ![Sasquatch walk 2000](docs/media/studies/03-tmwa-causal-sasquatch-walk-2000.png) | ![Sasquatch walk 6000](docs/media/studies/03-tmwa-causal-sasquatch-walk-6000.png) |
+
+| Broad held-out target | Broad held-out output |
+|---|---|
+| ![TMWA held-out attack target](docs/media/studies/04-tmwa-semantic-target-attack.png) | ![TMWA held-out attack generated](docs/media/studies/04-tmwa-semantic-generated-attack.png) |
 
 The broad rectified-flow control did not fix this and is retained as a rejected
 control rather than omitted from the record:
@@ -93,7 +98,7 @@ controls. They provided stronger priors but depend on large separately obtained 
 models and are not the desired consumer-scale architecture. The compact 2x RGBA
 autoencoder instead defines the detail ceiling for scratch-trained latent models.
 
-| SD 1.4 held-out still | AnimateDiff target | AnimateDiff generated | Compact codec reconstruction |
+| SD 1.4 held-out 1k→2.5k comparison | AnimateDiff target | AnimateDiff generated | Compact codec reconstruction |
 |---|---|---|---|
 | ![SD sprite LoRA held-out](docs/media/studies/06-mugen-sd14-lora-heldout.png) | ![AnimateDiff target](docs/media/studies/09-mugen-animatediff-target-attack.png) | ![AnimateDiff generated](docs/media/studies/09-mugen-animatediff-generated-attack.png) | ![RGBA codec reconstruction](docs/media/studies/12-mugen-rgba-autoencoder.png) |
 
@@ -125,20 +130,25 @@ one network to discover appearance, pose, and time simultaneously.
 |---|---|
 | ![Fixed-middle keypose study](docs/media/studies/11-mugen-fixed-middle-keypose.png) | ![Identity U-Net keypose study](docs/media/studies/14-mugen-keypose-unet.png) |
 
-| Anchored trajectory target | Anchored trajectory generated |
+Each anchored comparison contains the target and generated eight-frame trajectory.
+
+| Attack A | Attack B | Block |
+|---|---|---|
+| ![Anchored attack A comparison](docs/media/studies/15-mugen-anchored-attack-a-comparison.png) | ![Anchored attack B comparison](docs/media/studies/15-mugen-anchored-attack-b-comparison.png) | ![Anchored block comparison](docs/media/studies/15-mugen-anchored-block-comparison.png) |
+
+| Idle | Jump | Walk |
+|---|---|---|
+| ![Anchored idle comparison](docs/media/studies/15-mugen-anchored-idle-comparison.png) | ![Anchored jump comparison](docs/media/studies/15-mugen-anchored-jump-comparison.png) | ![Anchored walk comparison](docs/media/studies/15-mugen-anchored-walk-comparison.png) |
+
+### 7. Broad still-image DiT — 40,000-step evaluation
+
+The broad still-image DiT is the active scratch-trained image stage. This is its
+highest completed evaluation gallery at step 40,000. The release includes the
+subsequent step-45,000 EMA weights.
+
+| Broad still target | Generated at step 40,000 |
 |---|---|
-| ![Anchored target](docs/media/studies/15-mugen-anchored-target-attack-b.png) | ![Anchored generated](docs/media/studies/15-mugen-anchored-generated-attack-b.png) |
-
-### 7. Broad still-image model and crash-safe continuation
-
-The broad still-image DiT is the active scratch-trained image stage. This preview is
-from step 20,000 in the same line; the release preserves the later step-45,000 EMA
-and step-47,500 crash-resume state. The visual is deliberately labeled with its real
-step instead of being presented as a later render.
-
-| Broad still target | Generated at step 20,000 |
-|---|---|
-| ![Broad still target](docs/media/studies/13-mugen-broad-still-target.png) | ![Broad still generated at step 20000](docs/media/studies/13-mugen-broad-still-generated.png) |
+| ![Broad still target](docs/media/studies/13-mugen-broad-still-target.png) | ![Broad still generated at step 40000](docs/media/studies/13-mugen-broad-still-generated.png) |
 
 The complete per-study notes and weight mapping remain in
 [`docs/STUDY_GALLERY.md`](docs/STUDY_GALLERY.md), while exact checkpoint names,

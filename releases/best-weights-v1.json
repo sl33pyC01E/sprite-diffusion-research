@@ -125,12 +125,12 @@
     },
     {
       "id": "mugen-broad-still-dit-resume-47500",
-      "tier": "resume-state",
+      "tier": "current-training-state",
       "source_path": "data/experiments/mugen-six-action-broad-still-dit-scratch-v4j-b32-crashsafe-from45000-step50000/recovery-slot-2.pt",
       "release_asset": "mugen-broad-still-dit-resume-47500.pt",
       "bytes": 1317992936,
       "sha256": "3b5c0a8fcaa6e96bb9b844a644dc7f8555e8eb0f7ac3e1ebf5440466076d877f",
-      "note": "Latest verified crash-safe Stage-1 resume state at step 47,500; includes optimizer/RNG state."
+      "note": "Latest retained broad still-image training state at step 47,500."
     },
     {
       "id": "mugen-keypose-identity-unet-30000",

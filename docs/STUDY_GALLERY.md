@@ -37,13 +37,11 @@ Weight: `multi-identity-pixeldit-3000.pt`
 
 ## 3. TMWA Causal16 PixelDiT
 
-Matched Skull Ice walk replay. The 1,000-to-2,000 comparison uses the same target,
-request order, phases, and noise. The released 6,000-step checkpoint continues this
-same focused causal line; the images below are the most thoroughly audited 1k/2k pair.
+Matched Sasquatch walk replay at 1,000, 2,000, and 6,000 steps.
 
-| Target | 1,000 steps | 2,000 steps |
-|---|---|---|
-| ![Skull Ice walk target](media/studies/03-tmwa-causal-target-skull-ice-walk.png) | ![Skull Ice walk at 1000](media/studies/03-tmwa-causal-generated-1000.png) | ![Skull Ice walk at 2000](media/studies/03-tmwa-causal-generated-2000.png) |
+| Target | 1,000 steps | 2,000 steps | 6,000 steps |
+|---|---|---|---|
+| ![Sasquatch walk target](media/studies/03-tmwa-causal-target-sasquatch-walk.png) | ![Sasquatch walk at 1000](media/studies/03-tmwa-causal-sasquatch-walk-1000.png) | ![Sasquatch walk at 2000](media/studies/03-tmwa-causal-sasquatch-walk-2000.png) | ![Sasquatch walk at 6000](media/studies/03-tmwa-causal-sasquatch-walk-6000.png) |
 
 Weight: `tmwa-causal16-pixeldit-alpha4-6000.pt`
 
@@ -73,7 +71,7 @@ Historical held-out text-to-image adapter. It produced a stronger generic image 
 than the early scratch models but depends on a separately obtained SD 1.4 base and is
 not part of the intended efficient final architecture.
 
-![SD 1.4 sprite LoRA held-out preview](media/studies/06-mugen-sd14-lora-heldout.png)
+![SD 1.4 sprite LoRA held-out target and 1k/2.5k comparison](media/studies/06-mugen-sd14-lora-heldout.png)
 
 Weight: `mugen-sd14-sprite-lora-2500.pt`
 
@@ -140,18 +138,16 @@ latent models. This measures the best detail the downstream latent stages can re
 
 Weight: `mugen-rgba-autoencoder-2x-20000.pt`
 
-## 13. Broad still-image DiT and crash-resume state
+## 13. Broad still-image DiT — 40,000-step evaluation
 
-Representative target/output from the same broad still-image training line. The
-released EMA is step 45,000 and the resume state is step 47,500; this visual was
-exported at step 20,000 and is labeled as such rather than implied to be a later render.
+Highest completed evaluation gallery for the broad still-image training line. The
+release includes the subsequent step-45,000 EMA weights.
 
-| Target | Generated at step 20,000 |
+| Target | Generated at step 40,000 |
 |---|---|
 | ![Broad still target](media/studies/13-mugen-broad-still-target.png) | ![Broad still generated](media/studies/13-mugen-broad-still-generated.png) |
 
-Weights: `mugen-broad-still-dit-ema-45000.pt` and
-`mugen-broad-still-dit-resume-47500.pt`
+Weight: `mugen-broad-still-dit-ema-45000.pt`
 
 ## 14. Identity-conditioned keypose U-Net — 30,000 steps
 
@@ -163,12 +159,16 @@ Weight: `mugen-keypose-identity-unet-30000.pt`
 
 ## 15. Anchored trajectory model — 10,000 steps
 
-Stage-3 experiment conditioned on start/peak/end anchors. The endpoints are explicit,
-but the model can still average the trajectory between them.
+Stage-3 experiment conditioned on start/peak/end anchors. Every canonical action is
+shown below; each image compares the target and generated eight-frame trajectory.
 
-| Target | Generated |
-|---|---|
-| ![Anchored motion target](media/studies/15-mugen-anchored-target-attack-b.png) | ![Anchored motion generated](media/studies/15-mugen-anchored-generated-attack-b.png) |
+| Attack A | Attack B | Block |
+|---|---|---|
+| ![Attack A comparison](media/studies/15-mugen-anchored-attack-a-comparison.png) | ![Attack B comparison](media/studies/15-mugen-anchored-attack-b-comparison.png) | ![Block comparison](media/studies/15-mugen-anchored-block-comparison.png) |
+
+| Idle | Jump | Walk |
+|---|---|---|
+| ![Idle comparison](media/studies/15-mugen-anchored-idle-comparison.png) | ![Jump comparison](media/studies/15-mugen-anchored-jump-comparison.png) | ![Walk comparison](media/studies/15-mugen-anchored-walk-comparison.png) |
 
 Weight: `mugen-anchored-motion-10000.pt`
 
