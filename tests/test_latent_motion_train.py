@@ -280,6 +280,7 @@ def test_matched_pixel_action_loss_rewards_exact_and_rejects_collapse() -> None:
     target[0, :, 3, 0, 0] = 1
     target[1, :, 1, 1, 1] = 1
     target[1, :, 3, 1, 1] = 1
+    collapsed_prediction = target[:1].expand_as(target).clone().requires_grad_(True)
 
     exact = _matched_pixel_action_contrast_loss(
         torch,
@@ -288,7 +289,7 @@ def test_matched_pixel_action_loss_rewards_exact_and_rejects_collapse() -> None:
     )
     collapsed = _matched_pixel_action_contrast_loss(
         torch,
-        predicted_rgba=target[:1].expand_as(target),
+        predicted_rgba=collapsed_prediction,
         target_rgba=target,
     )
     swapped = _matched_pixel_action_contrast_loss(
@@ -300,6 +301,9 @@ def test_matched_pixel_action_loss_rewards_exact_and_rejects_collapse() -> None:
     assert exact.item() == pytest.approx(0)
     assert collapsed.item() > exact.item()
     assert swapped.item() > collapsed.item()
+    collapsed.backward()
+    assert collapsed_prediction.grad is not None
+    assert torch.isfinite(collapsed_prediction.grad).all()
 
 
 def test_matched_pixel_action_loss_rejects_shape_mismatch() -> None:
