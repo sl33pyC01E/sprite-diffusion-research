@@ -4,6 +4,7 @@ from dataclasses import asdict
 
 import pytest
 
+from scripts.run_mugen_latent_motion_refinement_v1 import refinement_config
 from spritelab.latent_motion_train import (
     LatentMotionTrainingConfig,
     LatentMotionTrainingError,
@@ -106,6 +107,25 @@ def test_default_is_corpus_scale_mixed_flow_not_endpoint_memorization() -> None:
     assert config.sampler_algorithm == "heun"
     assert config.model.model_dim == 384
     assert config.model.depth == 12
+
+
+def test_endpoint_refinement_control_differs_only_in_action_weight() -> None:
+    control = refinement_config("endpoint-control3000")
+    action = refinement_config("endpoint-action3000")
+
+    assert control.action_contrast_weight == pytest.approx(0)
+    assert action.action_contrast_weight == pytest.approx(1)
+    assert asdict(control) == {
+        **asdict(action),
+        "action_contrast_weight": 0.0,
+    }
+    assert action.time_sampling == "endpoint"
+    assert action.pixel_endpoint_weight == pytest.approx(2)
+
+
+def test_endpoint_refinement_rejects_unknown_profile() -> None:
+    with pytest.raises(ValueError, match="unsupported refinement profile"):
+        refinement_config("not-a-profile")
 
 
 def test_training_times_are_shared_across_a_matched_pair() -> None:
