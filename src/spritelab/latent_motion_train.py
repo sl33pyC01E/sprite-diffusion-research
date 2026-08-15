@@ -1594,7 +1594,7 @@ def _train(
 def _batch(
     runtime: Any,
     corpus: LatentMotionTrainingCorpus,
-    selection: tuple[int, int],
+    selection: tuple[int, ...],
     *,
     device: Any,
     mean: Any,
