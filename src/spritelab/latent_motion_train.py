@@ -71,6 +71,7 @@ class LatentMotionTrainingConfig:
     pixel_endpoint_weight: float = 1.0
     action_contrast_weight: float = 0.0
     pixel_action_contrast_weight: float = 0.0
+    temporal_motion_weight: float = 0.0
     action_batch_mode: ActionBatchMode = "pair"
     action_conditioning_mode: ActionConditioningMode = "single"
     action_token_count: int = 1
@@ -132,6 +133,7 @@ class LatentMotionTrainingConfig:
             "pixel_endpoint_weight",
             "action_contrast_weight",
             "pixel_action_contrast_weight",
+            "temporal_motion_weight",
             "endpoint_sample_probability",
         ):
             value = getattr(self, name)
@@ -1336,6 +1338,7 @@ def _train(
         accumulated_pixel = 0.0
         accumulated_action_contrast = 0.0
         accumulated_pixel_action_contrast = 0.0
+        accumulated_temporal_motion = 0.0
         accumulated_loss = 0.0
         for _ in range(config.gradient_accumulation):
             selection = (
@@ -1383,23 +1386,32 @@ def _train(
                 generated_latent = (reference.unsqueeze(1) + generated_residual) * std + mean
                 logits = decoder.decode_logits(generated_latent.reshape(-1, 8, 64, 64))
                 pixel_loss = sprite_reconstruction_loss(logits, target_rgba).total
+                predicted_rgba = runtime.sigmoid(logits).reshape(len(selection), 8, 4, 128, 128)
+                target_rgba_5d = target_rgba.reshape(len(selection), 8, 4, 128, 128)
                 pixel_action_contrast_loss = (
                     (
                         _matched_pixel_action_bundle_loss(
                             runtime,
-                            predicted_rgba=runtime.sigmoid(logits).reshape(
-                                len(selection), 8, 4, 128, 128
-                            ),
-                            target_rgba=target_rgba.reshape(len(selection), 8, 4, 128, 128),
+                            predicted_rgba=predicted_rgba,
+                            target_rgba=target_rgba_5d,
                         )
                         if config.action_batch_mode == "bundle"
                         else _matched_pixel_action_contrast_loss(
                             runtime,
-                            predicted_rgba=runtime.sigmoid(logits).reshape(2, 8, 4, 128, 128),
-                            target_rgba=target_rgba.reshape(2, 8, 4, 128, 128),
+                            predicted_rgba=predicted_rgba,
+                            target_rgba=target_rgba_5d,
                         )
                     )
                     if config.pixel_action_contrast_weight
+                    else latent_loss.new_zeros(())
+                )
+                temporal_motion_loss = (
+                    _temporal_motion_anti_collapse_loss(
+                        runtime,
+                        predicted_rgba=predicted_rgba,
+                        target_rgba=target_rgba_5d,
+                    )
+                    if config.temporal_motion_weight
                     else latent_loss.new_zeros(())
                 )
                 loss = (
@@ -1407,6 +1419,7 @@ def _train(
                     + config.pixel_endpoint_weight * pixel_loss
                     + config.action_contrast_weight * action_contrast_loss
                     + config.pixel_action_contrast_weight * pixel_action_contrast_loss
+                    + config.temporal_motion_weight * temporal_motion_loss
                 )
                 scaled = loss / config.gradient_accumulation
             if not bool(runtime.isfinite(scaled)):
@@ -1416,6 +1429,7 @@ def _train(
             accumulated_pixel += float(pixel_loss.detach().cpu())
             accumulated_action_contrast += float(action_contrast_loss.detach().cpu())
             accumulated_pixel_action_contrast += float(pixel_action_contrast_loss.detach().cpu())
+            accumulated_temporal_motion += float(temporal_motion_loss.detach().cpu())
             accumulated_loss += float(loss.detach().cpu())
         gradient_norm = float(
             runtime.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
@@ -1457,6 +1471,9 @@ def _train(
                 "pixel_endpoint_loss": accumulated_pixel / config.gradient_accumulation,
                 "pixel_action_contrast_loss": (
                     accumulated_pixel_action_contrast / config.gradient_accumulation
+                ),
+                "temporal_motion_loss": (
+                    accumulated_temporal_motion / config.gradient_accumulation
                 ),
                 "step": step,
                 "validation": latest_validation
@@ -2049,6 +2066,44 @@ def _matched_pixel_action_bundle_loss(
     if not delta_losses:
         raise ValueError("matched pixel action bundle has no target-distinct pairs")
     return runtime.stack(delta_losses).mean() + runtime.stack(preference_losses).mean()
+
+
+def _temporal_motion_anti_collapse_loss(
+    runtime: Any,
+    *,
+    predicted_rgba: Any,
+    target_rgba: Any,
+) -> Any:
+    """Penalize static averaging wherever the authored clip actually moves."""
+
+    expected = tuple(target_rgba.shape)
+    if len(expected) != 5 or expected[1] < 2 or expected[2] != 4:
+        raise ValueError("temporal motion tensors must have shape [B,T>=2,4,H,W]")
+    if tuple(predicted_rgba.shape) != expected:
+        raise ValueError("temporal motion tensors must share one shape")
+    predicted_alpha = predicted_rgba[:, :, 3:4]
+    target_alpha = target_rgba[:, :, 3:4]
+    predicted_pm = runtime.cat((predicted_rgba[:, :, :3] * predicted_alpha, predicted_alpha), dim=2)
+    target_pm = runtime.cat((target_rgba[:, :, :3] * target_alpha, target_alpha), dim=2)
+    predicted_delta = predicted_pm[:, 1:] - predicted_pm[:, :-1]
+    target_delta = target_pm[:, 1:] - target_pm[:, :-1]
+    target_magnitude = target_delta.abs().mean(dim=(1, 2, 3, 4))
+    dynamic = target_magnitude > 1e-4
+    if not bool(dynamic.any()):
+        return predicted_rgba.sum() * 0
+
+    predicted_delta = predicted_delta[dynamic]
+    target_delta = target_delta[dynamic]
+    target_magnitude = target_magnitude[dynamic]
+    change_strength = target_delta.abs().amax(dim=2, keepdim=True)
+    change_weight = 1 + 8 * change_strength
+    delta_error = ((predicted_delta - target_delta).abs() * change_weight).sum(
+        dim=(1, 2, 3, 4)
+    ) / change_weight.expand_as(target_delta).sum(dim=(1, 2, 3, 4))
+    normalized_delta_error = delta_error / target_magnitude.clamp_min(1e-4)
+    predicted_magnitude = predicted_delta.abs().mean(dim=(1, 2, 3, 4))
+    motion_shortfall = runtime.relu(target_magnitude - predicted_magnitude) / target_magnitude
+    return (normalized_delta_error + motion_shortfall).mean()
 
 
 def _paired_appearance_metrics(

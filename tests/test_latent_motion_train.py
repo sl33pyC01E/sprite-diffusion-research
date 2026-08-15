@@ -28,6 +28,7 @@ from spritelab.latent_motion_train import (
     _sample_training_times,
     _target_distinct_bundles_from_index,
     _target_distinct_pairs_from_index,
+    _temporal_motion_anti_collapse_loss,
     _time_batch_view,
     build_matched_action_index,
     sample_matched_action_pair,
@@ -180,6 +181,16 @@ def test_expanded_bundle_strengthens_action_conditioning() -> None:
     assert config.action_conditioning_mode == "expanded"
     assert config.action_token_count == 4
     assert config.action_condition_scale == pytest.approx(2)
+
+
+def test_motion_enforced_profile_makes_static_averaging_expensive() -> None:
+    config = refinement_config("endpoint-motion-enforced45000")
+
+    assert config.steps == 45_000
+    assert config.action_batch_mode == "bundle"
+    assert config.action_conditioning_mode == "expanded"
+    assert config.pixel_action_contrast_weight == pytest.approx(0.5)
+    assert config.temporal_motion_weight == pytest.approx(2)
 
 
 def test_expanded_action_bundle_projects_four_tokens_and_frame_program() -> None:
@@ -474,6 +485,56 @@ def test_matched_pixel_action_bundle_loss_rejects_pair_shape() -> None:
 
     with pytest.raises(ValueError, match="B>=3"):
         _matched_pixel_action_bundle_loss(torch, predicted_rgba=target, target_rgba=target)
+
+
+def test_temporal_motion_loss_breaks_static_average_without_rewarding_noise() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 3, 4, 3, 3))
+    target[:, 0, 0, 0, 0] = 1
+    target[:, 0, 3, 0, 0] = 1
+    target[:, 1, 0, 1, 1] = 1
+    target[:, 1, 3, 1, 1] = 1
+    target[:, 2, 0, 2, 2] = 1
+    target[:, 2, 3, 2, 2] = 1
+    static = target[:, :1].expand_as(target).clone().requires_grad_(True)
+    wrong_motion = torch.flip(target, (-1,)).clone()
+
+    exact_loss = _temporal_motion_anti_collapse_loss(
+        torch, predicted_rgba=target, target_rgba=target
+    )
+    static_loss = _temporal_motion_anti_collapse_loss(
+        torch, predicted_rgba=static, target_rgba=target
+    )
+    wrong_motion_loss = _temporal_motion_anti_collapse_loss(
+        torch, predicted_rgba=wrong_motion, target_rgba=target
+    )
+
+    assert exact_loss.item() == pytest.approx(0)
+    assert static_loss.item() > exact_loss.item()
+    assert wrong_motion_loss.item() > exact_loss.item()
+    static_loss.backward()
+    assert static.grad is not None
+    assert torch.isfinite(static.grad).all()
+
+
+def test_temporal_motion_loss_ignores_genuinely_static_target() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 3, 4, 2, 2))
+    predicted = torch.rand_like(target, requires_grad=True)
+
+    loss = _temporal_motion_anti_collapse_loss(torch, predicted_rgba=predicted, target_rgba=target)
+
+    assert loss.item() == pytest.approx(0)
+    loss.backward()
+    assert predicted.grad is not None
+
+
+def test_temporal_motion_loss_rejects_shape_mismatch() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((2, 3, 4, 2, 2))
+
+    with pytest.raises(ValueError, match="share one shape"):
+        _temporal_motion_anti_collapse_loss(torch, predicted_rgba=target[:1], target_rgba=target)
 
 
 def test_paired_appearance_metrics_separate_sprite_and_canvas_error() -> None:
