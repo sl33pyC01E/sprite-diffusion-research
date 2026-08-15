@@ -10,9 +10,11 @@ torch = pytest.importorskip("torch")
 from scripts.render_mugen_anchored_motion_checkpoint_v1 import (  # noqa: E402
     _comparison_sheet,
     _config_from_checkpoint,
+    _keypose_config_from_checkpoint,
     _rgba_uint8,
 )
 from spritelab.anchored_motion_train import AnchoredMotionTrainingConfig  # noqa: E402
+from spritelab.latent_keypose_train import LatentKeyposeTrainingConfig  # noqa: E402
 
 
 def test_config_from_checkpoint_restores_nested_model() -> None:
@@ -28,6 +30,17 @@ def test_config_from_checkpoint_restores_nested_model() -> None:
 def test_config_from_checkpoint_rejects_missing_model() -> None:
     with pytest.raises(ValueError, match="model config"):
         _config_from_checkpoint({"steps": 10})
+
+
+def test_keypose_config_from_checkpoint_restores_direct_contract() -> None:
+    expected = LatentKeyposeTrainingConfig(
+        device="cpu", precision="float32", prediction_mode="direct_residual"
+    )
+
+    actual = _keypose_config_from_checkpoint(asdict(expected))
+
+    assert actual == expected
+    assert actual.keypose_frame_index == 4
 
 
 def test_rgba_conversion_and_comparison_sheet_preserve_slots() -> None:
