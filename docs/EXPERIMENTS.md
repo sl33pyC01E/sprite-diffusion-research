@@ -819,3 +819,47 @@ only cover one fighter and two in-sample verbs. The next broad run must use
 identity-disjoint validation and an action-balanced sampler so common verbs do not
 dominate token learning. It should not merely concatenate every MUGEN clip and
 train in source-frequency order.
+
+### Dense six-action scratch latent-motion gate at 10,000 steps
+
+The replacement scratch experiment uses the schema-aligned dense MUGEN corpus:
+3,759 identities, each with exactly `idle`, `walk`, `jump`, `block`, `attack_a`,
+and `attack_b`. That is 22,554 eight-frame sequences and 180,432 ordered frames.
+The identity-disjoint split contains 3,442 train, 162 validation, and 155 test
+identities. The training-manifest SHA-256 is
+`b071a02004a486c76b73023bb8fd9678d30741ecb203d46b87e3320e59f0e196`.
+
+The motion model is trained from scratch, not as a LoRA: approximately 59 million
+parameters, 64x64 eight-channel codec latents, eight frames, 4x4 latent patches,
+width 384, depth 12, six attention heads, factorized reference/action/phase
+conditioning, uniform flow time with 25% endpoint examples, and frozen-codec pixel
+supervision. The exact resumable step-10,000 checkpoint SHA-256 is
+`8dd03f0757314c7977bec8546e255923ffc40a017c327ea1f013fff8e942de46`.
+
+The no-clobber gate compares the same checkpoint on 64 balanced same-identity,
+target-distinct action pairs from the train split and 64 from identities that are
+absent from training. It also compares the configured 16-step Heun trajectory with
+the checkpoint's direct endpoint prediction under the same request, phase, order,
+and noise contracts. The evaluation-report SHA-256 is
+`96cdaf9515f845d407423e2128ef6476dcb625aa56ccdd0c8c1067c9eda06832`.
+
+Direct endpoint prediction is materially cleaner than Heun-16 at this stage. On
+train identities, premultiplied-RGBA MAE is `0.028951` versus `0.046772`, alpha
+IoU@127 is `0.496477` versus `0.375203`, and temporal-delta MAE is `0.013860`
+versus `0.034941`. On unseen test identities, endpoint MAE is `0.033462` versus
+`0.052503`, alpha IoU is `0.502071` versus `0.387622`, and temporal-delta MAE is
+`0.014961` versus `0.038045`.
+
+Those aggregate numbers do not constitute a quality pass. Exact target/generated
+contact sheets show softened silhouettes, lost edge detail, incomplete foreground
+occupancy, and weak action motion. Endpoint foreground occupancy is only `0.7152`
+of target on train and `0.7521` on test; own-action target preference remains near
+chance (`0.5234` train, `0.5312` test). The checkpoint has learned coarse identity
+and palette, and changing the action token has a measurable effect, but it has not
+yet learned reliable six-way action steering or asset-quality pixels.
+
+The exact baseline continuation resumes optimizer, EMA, sampler, and RNG state
+from step 10,000 toward the original 50,000-step budget. This is an undertraining
+test on the dense corpus, not an architectural victory claim. A separately tested
+matched-action contrast loss remains disabled in the baseline so later comparisons
+can distinguish more training from a changed objective.
