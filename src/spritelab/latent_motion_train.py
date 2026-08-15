@@ -1690,6 +1690,12 @@ def _validate(
     output["action_token_loss_delta"] = (
         output["action_permuted_mse"] - output["latent_endpoint_mse"]
     )
+    if output["target_temporal_magnitude"] > 1e-8:
+        output["temporal_motion_ratio"] = (
+            output["generated_temporal_magnitude"] / output["target_temporal_magnitude"]
+        )
+    else:
+        output["static_target_spurious_temporal_magnitude"] = output["generated_temporal_magnitude"]
     for verb in sorted(verb_totals, key=str.encode):
         output[f"verb_{verb}_premultiplied_rgba_mae"] = verb_totals[verb] / verb_counts[verb]
         generated_key = f"verb_{verb}_generated_temporal_magnitude"
@@ -1698,7 +1704,10 @@ def _validate(
         target_motion = totals[target_key] / verb_counts[verb]
         output[generated_key] = generated_motion
         output[target_key] = target_motion
-        output[f"verb_{verb}_temporal_motion_ratio"] = generated_motion / max(target_motion, 1e-8)
+        if target_motion > 1e-8:
+            output[f"verb_{verb}_temporal_motion_ratio"] = generated_motion / target_motion
+        else:
+            output[f"verb_{verb}_static_target_spurious_temporal_magnitude"] = generated_motion
     return output
 
 
@@ -1825,7 +1834,6 @@ def _paired_temporal_motion_metrics(
     return {
         "generated_temporal_magnitude": generated_magnitude,
         "target_temporal_magnitude": target_magnitude,
-        "temporal_motion_ratio": generated_magnitude / target_magnitude.clamp_min(1e-8),
     }
 
 

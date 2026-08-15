@@ -310,7 +310,7 @@ def test_paired_temporal_motion_metrics_expose_static_collapse() -> None:
 
     assert metrics["target_temporal_magnitude"].item() == pytest.approx(1)
     assert metrics["generated_temporal_magnitude"].item() == pytest.approx(0.25)
-    assert metrics["temporal_motion_ratio"].item() == pytest.approx(0.25)
+    assert "temporal_motion_ratio" not in metrics
 
 
 def test_paired_temporal_motion_metrics_reject_shape_mismatch() -> None:
