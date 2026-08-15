@@ -31,6 +31,7 @@ from spritelab.latent_keypose_train import (  # noqa: E402
     build_keypose_action_bundles,
 )
 from spritelab.latent_motion_train import (  # noqa: E402
+    LatentMotionTrainingCorpus,
     _load_frozen_decoder,
     load_latent_motion_training_corpus,
 )
@@ -110,6 +111,116 @@ def _comparison_sheet(target: np.ndarray, generated: np.ndarray) -> Image.Image:
     return sheet
 
 
+def _validate_with_predicted_keypose(
+    corpus: LatentMotionTrainingCorpus,
+    bundles: tuple[tuple[int, ...], ...],
+    motion_model: torch.nn.Module,
+    keypose_model: torch.nn.Module,
+    decoder: torch.nn.Module,
+    *,
+    motion_config: AnchoredMotionTrainingConfig,
+    keypose_config: LatentKeyposeTrainingConfig,
+    mean: torch.Tensor,
+    std: torch.Tensor,
+) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    motion_generator = torch.Generator(device="cpu").manual_seed(motion_config.seed + 20_000)
+    keypose_generator = torch.Generator(device="cpu").manual_seed(keypose_config.seed + 20_000)
+    with torch.no_grad():
+        for selection in bundles:
+            clean, reference, target_rgba, phases, actions, anchors, mask = _anchored_batch(
+                torch,
+                corpus,
+                selection,
+                config=motion_config,
+                device=torch.device("cpu"),
+                mean=mean,
+                std=std,
+            )
+            true_middle = anchors[:, motion_config.canonical_middle_frame_index].clone()
+            keypose_noise = torch.randn(
+                (1, *true_middle.shape[1:]), generator=keypose_generator
+            ).expand_as(true_middle)
+            keypose_input, _ = _keypose_prediction_contract(
+                torch,
+                clean_residual=true_middle,
+                noise=keypose_noise,
+                prediction_mode=keypose_config.prediction_mode,
+            )
+            keypose_phase = torch.full(
+                (len(selection), 1),
+                motion_config.canonical_middle_frame_index / motion_config.model.num_frames,
+            )
+            keypose_velocity = keypose_model(
+                keypose_input.unsqueeze(1),
+                reference,
+                torch.ones((len(selection),)),
+                actions,
+                frame_phase=keypose_phase,
+            )[:, 0]
+            anchors = anchors.clone()
+            anchors[:, motion_config.canonical_middle_frame_index] = (
+                keypose_input - keypose_velocity
+            )
+            noise = torch.randn((1, *clean.shape[1:]), generator=motion_generator).expand_as(clean)
+            residual = sample_anchored_motion_residual(
+                torch,
+                motion_model,
+                noise=noise,
+                reference=reference,
+                actions=actions,
+                phases=phases,
+                anchor_residuals=anchors,
+                anchor_mask=mask,
+            )
+            latent = (reference.unsqueeze(1) + residual) * std + mean
+            predicted_rgba = torch.sigmoid(
+                decoder.decode_logits(latent.reshape(-1, 8, 64, 64))
+            ).reshape(len(selection), 8, 4, 128, 128)
+            metrics = _trajectory_bundle_metrics(
+                torch,
+                predicted_rgba=predicted_rgba[:, 1:7].float(),
+                target_rgba=target_rgba[:, 1:7],
+            )
+            predicted_pm = _premultiplied(predicted_rgba.float())
+            target_pm = _premultiplied(target_rgba)
+            reference_latent = reference * std[:, 0] + mean[:, 0]
+            reference_rgba = torch.sigmoid(decoder.decode_logits(reference_latent))
+            target_loop = target_rgba.clone()
+            target_loop[:, 0] = reference_rgba
+            target_loop[:, 7] = reference_rgba
+            target_loop_pm = _premultiplied(target_loop)
+            metrics["generated_temporal_magnitude"] = (
+                (predicted_pm[:, 1:] - predicted_pm[:, :-1]).abs().mean()
+            )
+            metrics["target_temporal_magnitude"] = (
+                (target_loop_pm[:, 1:] - target_loop_pm[:, :-1]).abs().mean()
+            )
+            middle = motion_config.canonical_middle_frame_index
+            metrics["middle_anchor_latent_residual_mae"] = (
+                (anchors[:, middle] - true_middle).abs().mean()
+            )
+            metrics["middle_anchor_premultiplied_rgba_mae"] = torch.nn.functional.l1_loss(
+                predicted_pm[:, middle], target_pm[:, middle]
+            )
+            for key, value in metrics.items():
+                totals[key] = totals.get(key, 0.0) + float(value.cpu())
+    count = len(bundles)
+    output = {key: value / count for key, value in totals.items()}
+    output["generated_to_target_action_separation_ratio"] = output[
+        "generated_action_separation"
+    ] / max(output["target_action_separation"], 1e-8)
+    output["temporal_motion_ratio"] = output["generated_temporal_magnitude"] / max(
+        output["target_temporal_magnitude"], 1e-8
+    )
+    return output
+
+
+def _premultiplied(rgba: torch.Tensor) -> torch.Tensor:
+    alpha = rgba[:, :, 3:4]
+    return torch.cat((rgba[:, :, :3] * alpha, alpha), dim=2)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
@@ -127,8 +238,6 @@ def main() -> None:
         raise ValueError("aggregate identities cannot be negative")
     if (args.keypose_checkpoint is None) != (args.expected_keypose_sha256 is None):
         parser.error("key-pose checkpoint and expected SHA-256 must be supplied together")
-    if args.keypose_checkpoint is not None and args.aggregate_identities:
-        parser.error("predicted-keypose aggregate evaluation is not implemented in v1")
 
     checkpoint_path = args.checkpoint.resolve()
     checkpoint_sha256 = _sha256(checkpoint_path)
@@ -403,13 +512,29 @@ def main() -> None:
         validation_bundles = build_keypose_action_bundles(corpus, corpus.validation_indices)[
             : args.aggregate_identities
         ]
-        report["aggregate_metrics"] = {
-            "training": {
-                "identity_count": len(train_bundles),
-                "metrics": _validate(
+        aggregate_metrics = {}
+        for split, bundles in (
+            ("training", train_bundles),
+            ("validation", validation_bundles),
+        ):
+            if keypose_model is not None:
+                assert keypose_config is not None
+                metrics = _validate_with_predicted_keypose(
+                    corpus,
+                    bundles,
+                    model,
+                    keypose_model,
+                    decoder,
+                    motion_config=config,
+                    keypose_config=keypose_config,
+                    mean=mean,
+                    std=std,
+                )
+            else:
+                metrics = _validate(
                     torch,
                     corpus,
-                    train_bundles,
+                    bundles,
                     model,
                     decoder,
                     config=config,
@@ -418,25 +543,12 @@ def main() -> None:
                     autocast=False,
                     mean=mean,
                     std=std,
-                ),
-            },
-            "validation": {
-                "identity_count": len(validation_bundles),
-                "metrics": _validate(
-                    torch,
-                    corpus,
-                    validation_bundles,
-                    model,
-                    decoder,
-                    config=config,
-                    device=torch.device("cpu"),
-                    dtype=torch.float32,
-                    autocast=False,
-                    mean=mean,
-                    std=std,
-                ),
-            },
-        }
+                )
+            aggregate_metrics[split] = {
+                "identity_count": len(bundles),
+                "metrics": metrics,
+            }
+        report["aggregate_metrics"] = aggregate_metrics
     report_path = output / "report.json"
     report_path.write_bytes(canonical_json_bytes(report))
     print(

@@ -924,3 +924,19 @@ actions, including on the selected unseen character. Intermediate frames remain 
 speckled and softer than the target. The run therefore passes an early trajectory and
 steering gate but not an asset-quality pixel gate; training continues under the original
 30,000-step schedule without changing its objective.
+
+The first Stage-2-to-Stage-3 robustness evaluation replaces the true middle anchor with
+the final raw key-pose model prediction while preserving the exact motion checkpoint,
+reference frames, actions, phases, and noise contract. Across eight training identities,
+the resulting loops retain `0.812500` target preference and `0.717187` of target action
+separation. Across eight unseen identities, preference falls to `0.229167` and action
+separation to `0.473786`; middle-anchor premultiplied-RGBA MAE is `0.035907`. The
+aggregate report SHA-256 is
+`cd1e6be55ccf267400a1ae72c33a7ef870215219bcf2ff26249a2ee0c31300d8`.
+
+This establishes a concrete interface bottleneck rather than a motion-model failure.
+The hard-clamped trajectory stage faithfully propagates the supplied pose, so later
+motion training cannot repair an incorrect Stage-2 anchor. A complete held-out pipeline
+therefore requires a better reference-plus-verb key-pose model or an explicitly trained
+robustness/refinement stage; teacher-forced motion metrics must not be reported as
+end-to-end performance.
