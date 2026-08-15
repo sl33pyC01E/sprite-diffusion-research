@@ -7,7 +7,8 @@ preprocessing.
 
 **[Visual study gallery](docs/STUDY_GALLERY.md)** ·
 **[Weight release guide](docs/WEIGHTS_RELEASE.md)** ·
-**[Exact weight manifest](releases/best-weights-v1.json)**
+**[Exact weight manifest](releases/best-weights-v1.json)** ·
+**[Dataset backup contract](docs/DATASET_BACKUP.md)**
 
 The initial target is a transparent 64x64 RGBA, eight-frame animation. The
 fast baseline is an image-first diffusion pipeline; the main research target

@@ -1,0 +1,90 @@
+{
+  "artifact_kind": "spritelab_drive_dataset_backup_selection",
+  "schema_version": 1,
+  "created_at": "2026-08-15",
+  "drive_folder_id": "1ov3R_eXN8-BnJT88_rwBRWsepl-Oa7oq",
+  "drive_folder_name": "Sprite Diffusion Research Dataset Backup — 2026-08-15",
+  "claim": "Private reconstruction-oriented research backup; no redistribution rights are asserted.",
+  "selected_files": 158495,
+  "selected_bytes": 112572985487,
+  "selections": [
+    {
+      "path": "data/raw/manual/mugen-anime-ascension-4000-v1/anime-ascension-4000-physical-rar-v1.rar",
+      "role": "complete_compact_source_archive",
+      "files": 1,
+      "bytes": 71736537088,
+      "sha256": "0a16a93be8971843ea1822cffd95942364e2b9f6ce05a1dd921ce490f1a71294"
+    },
+    {
+      "path": "data/raw/objects",
+      "role": "immutable_content_addressed_source_objects",
+      "files": 127094,
+      "bytes": 18332405300
+    },
+    {
+      "path": "data/raw/acquisitions",
+      "role": "acquisition_receipts",
+      "files": 3,
+      "bytes": 4717
+    },
+    {
+      "path": "data/processed/mugen-anime-ascension-schema-core-b128-f8-v2",
+      "role": "canonical_rgba_six_action_corpus",
+      "files": 10703,
+      "bytes": 5726265646
+    },
+    {
+      "path": "data/processed/mugen-iidx-jus-chibi-schema-core-b128-f8-v2",
+      "role": "canonical_rgba_six_action_corpus",
+      "files": 13095,
+      "bytes": 6973870200
+    },
+    {
+      "path": "data/processed/mugen-anime-all-stars3-schema-core-b128-f8-v2",
+      "role": "canonical_rgba_six_action_corpus",
+      "files": 714,
+      "bytes": 375457461
+    },
+    {
+      "path": "data/processed/mugen-mffa-anime-combined-action-v1",
+      "role": "canonical_rgba_six_action_corpus",
+      "files": 5907,
+      "bytes": 3110588084
+    },
+    {
+      "path": "data/processed/mugen-six-action-broad-captions-v1",
+      "role": "broad_training_captions",
+      "files": 2,
+      "bytes": 26532644
+    },
+    {
+      "path": "data/processed/mugen-mffa-canonical-still-captions-v3-spark-qwen35-122b",
+      "role": "canonical_still_captions",
+      "files": 229,
+      "bytes": 3524476
+    },
+    {
+      "path": "data/index",
+      "role": "provenance_database_manifests_snapshots_and_reports",
+      "files": 747,
+      "bytes": 6287799871
+    }
+  ],
+  "excluded_roots": [
+    "data/models",
+    "data/experiments",
+    "data/inference",
+    "data/release-staging",
+    "data/.partials"
+  ],
+  "excluded_specific": [
+    "data/raw/manual/mugen-x-alpha-3016-v1/mugen-x-alpha-3016-v1.rar.partialzln8ymjh.part"
+  ],
+  "excluded_derived_classes": [
+    "foundation_model_cache",
+    "optimizer_and_duplicate_checkpoints",
+    "vae_latent_cache",
+    "clip_token_cache",
+    "temporary_or_partial_materialization"
+  ]
+}
