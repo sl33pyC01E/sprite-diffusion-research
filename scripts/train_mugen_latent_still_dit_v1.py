@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +38,8 @@ def main() -> None:
     parser.add_argument("--resume-checkpoint", type=Path)
     parser.add_argument("--expected-resume-sha256")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--gradient-accumulation", type=int)
     args = parser.parse_args()
     if (args.resume_checkpoint is None) != (args.expected_resume_sha256 is None):
         raise ValueError("resume checkpoint and expected SHA-256 must be provided together")
@@ -56,6 +58,16 @@ def main() -> None:
             checkpoint_every=1,
             validation_rows=1,
         )
+    overrides = {
+        key: value
+        for key, value in (
+            ("batch_size", args.batch_size),
+            ("gradient_accumulation", args.gradient_accumulation),
+        )
+        if value is not None
+    }
+    if overrides:
+        config = replace(config, **overrides)
     default_outputs = {
         "corpus50000": CORPUS_OUTPUT,
         "legacy30000": LEGACY_OUTPUT,
