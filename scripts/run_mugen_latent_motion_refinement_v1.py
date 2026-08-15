@@ -30,6 +30,7 @@ def refinement_config(profile: str) -> LatentMotionTrainingConfig:
         "endpoint-pixel-action3000": (3_000, 0.0, 0.5, "pair", 4),
         "endpoint-pixel-action10000": (10_000, 0.0, 0.5, "pair", 4),
         "endpoint-pixel-action-bundle3000": (3_000, 0.0, 0.5, "bundle", 2),
+        "endpoint-expanded-action-bundle3000": (3_000, 0.0, 0.5, "bundle", 2),
     }
     try:
         steps, action_weight, pixel_action_weight, batch_mode, accumulation = profiles[profile]
@@ -46,6 +47,11 @@ def refinement_config(profile: str) -> LatentMotionTrainingConfig:
         action_contrast_weight=action_weight,
         pixel_action_contrast_weight=pixel_action_weight,
         action_batch_mode=batch_mode,
+        action_conditioning_mode=(
+            "expanded" if profile == "endpoint-expanded-action-bundle3000" else "single"
+        ),
+        action_token_count=4 if profile == "endpoint-expanded-action-bundle3000" else 1,
+        action_condition_scale=2.0 if profile == "endpoint-expanded-action-bundle3000" else 1.0,
         time_sampling="endpoint",
         endpoint_sample_probability=0.0,
         inference_steps=1,
@@ -77,6 +83,7 @@ def main() -> None:
             "endpoint-pixel-action3000",
             "endpoint-pixel-action10000",
             "endpoint-pixel-action-bundle3000",
+            "endpoint-expanded-action-bundle3000",
         ),
         required=True,
     )

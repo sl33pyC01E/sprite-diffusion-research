@@ -181,6 +181,7 @@ if torch is not None and nn is not None:
             *,
             conditioning_mask: torch.Tensor | None = None,
             frame_phase: torch.Tensor | None = None,
+            frame_conditioning: torch.Tensor | None = None,
         ) -> torch.Tensor:
             batch = validate_latent_motion_shapes(
                 tuple(video.shape), tuple(reference.shape), self.config
@@ -204,6 +205,21 @@ if torch is not None and nn is not None:
             tokens = tokens + self._phase_features(
                 frame_phase, batch=batch, device=video.device
             ).to(tokens.dtype)
+            if frame_conditioning is not None:
+                expected_frame_conditioning = (
+                    batch,
+                    self.config.num_frames,
+                    self.config.model_dim,
+                )
+                if tuple(frame_conditioning.shape) != expected_frame_conditioning:
+                    raise ValueError(
+                        f"frame_conditioning must have shape {expected_frame_conditioning!r}"
+                    )
+                if not bool(torch.isfinite(frame_conditioning).all()):
+                    raise ValueError("frame_conditioning values must be finite")
+                tokens = tokens + frame_conditioning.to(
+                    device=video.device, dtype=tokens.dtype
+                ).unsqueeze(2)
             for block in self.blocks:
                 tokens = block(tokens, global_condition, context, mask)
             return self._unpatchify(self.final_layer(tokens, global_condition))

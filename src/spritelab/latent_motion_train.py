@@ -49,6 +49,7 @@ TimeSampling = Literal["endpoint", "uniform"]
 FlowSampler = Literal["euler", "heun"]
 ArrayLoading = Literal["eager", "lazy"]
 ActionBatchMode = Literal["pair", "bundle"]
+ActionConditioningMode = Literal["single", "expanded"]
 
 
 class LatentMotionTrainingError(ValueError):
@@ -71,6 +72,9 @@ class LatentMotionTrainingConfig:
     action_contrast_weight: float = 0.0
     pixel_action_contrast_weight: float = 0.0
     action_batch_mode: ActionBatchMode = "pair"
+    action_conditioning_mode: ActionConditioningMode = "single"
+    action_token_count: int = 1
+    action_condition_scale: float = 1.0
     time_sampling: TimeSampling = "uniform"
     endpoint_sample_probability: float = 0.25
     inference_steps: int = 16
@@ -98,6 +102,7 @@ class LatentMotionTrainingConfig:
     def __post_init__(self) -> None:
         for name in (
             "gradient_accumulation",
+            "action_token_count",
             "inference_steps",
             "steps",
             "log_every",
@@ -118,6 +123,8 @@ class LatentMotionTrainingConfig:
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
+        if not math.isfinite(self.action_condition_scale) or self.action_condition_scale <= 0:
+            raise ValueError("action_condition_scale must be finite and positive")
         for name in (
             "minimum_learning_rate",
             "weight_decay",
@@ -140,6 +147,10 @@ class LatentMotionTrainingConfig:
             raise ValueError("time_sampling must be endpoint or uniform")
         if self.action_batch_mode not in {"pair", "bundle"}:
             raise ValueError("action_batch_mode must be pair or bundle")
+        if self.action_conditioning_mode not in {"single", "expanded"}:
+            raise ValueError("action_conditioning_mode must be single or expanded")
+        if self.action_conditioning_mode == "single" and self.action_token_count != 1:
+            raise ValueError("single action conditioning requires one token")
         if self.action_batch_mode == "bundle" and self.action_contrast_weight:
             raise ValueError("bundle action batches require pixel-space action contrast")
         if self.sampler_algorithm not in {"euler", "heun"}:
@@ -321,11 +332,81 @@ class LatentMotionEvaluationResult:
 if torch is not None and nn is not None:
 
     class _ActionConditionedMotionModel(nn.Module):
-        def __init__(self, config: LatentMotionDiTConfig, action_count: int) -> None:
+        def __init__(
+            self,
+            config: LatentMotionDiTConfig,
+            action_count: int,
+            *,
+            conditioning_mode: ActionConditioningMode = "single",
+            action_token_count: int = 1,
+            action_condition_scale: float = 1.0,
+        ) -> None:
             super().__init__()
+            self.config = config
+            self.conditioning_mode = conditioning_mode
+            self.action_token_count = action_token_count
+            self.action_condition_scale = action_condition_scale
             self.dit = ReferenceConditionedLatentMotionDiT(config)
             self.action_embedding = nn.Embedding(action_count, config.condition_dim)
             self.action_norm = nn.LayerNorm(config.condition_dim)
+            if conditioning_mode == "expanded":
+                phase_width = 1 + 2 * config.phase_harmonics
+                self.action_token_projection = nn.Linear(
+                    config.condition_dim,
+                    action_token_count * config.condition_dim,
+                )
+                self.action_token_norm = nn.LayerNorm(config.condition_dim)
+                self.action_frame_mlp = nn.Sequential(
+                    nn.Linear(config.condition_dim + phase_width, config.model_dim * 2),
+                    nn.SiLU(),
+                    nn.Linear(config.model_dim * 2, config.model_dim),
+                )
+                self._initialize_expanded_conditioning()
+
+        def _initialize_expanded_conditioning(self) -> None:
+            with torch.no_grad():
+                self.action_token_projection.weight.zero_()
+                self.action_token_projection.bias.zero_()
+                identity = torch.eye(
+                    self.config.condition_dim,
+                    dtype=self.action_token_projection.weight.dtype,
+                )
+                for token_index in range(self.action_token_count):
+                    start = token_index * self.config.condition_dim
+                    self.action_token_projection.weight[
+                        start : start + self.config.condition_dim
+                    ].copy_(identity)
+                nn.init.normal_(self.action_frame_mlp[-1].weight, std=0.02)
+                self.action_frame_mlp[-1].bias.zero_()
+
+        def _expanded_action_conditioning(
+            self, action_indices: torch.Tensor, frame_phase: torch.Tensor
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            base = self.action_norm(self.action_embedding(action_indices))
+            context = self.action_token_projection(base).reshape(
+                base.shape[0], self.action_token_count, self.config.condition_dim
+            )
+            context = self.action_token_norm(context) * self.action_condition_scale
+            frequencies = torch.arange(
+                1,
+                self.config.phase_harmonics + 1,
+                device=frame_phase.device,
+                dtype=torch.float32,
+            )
+            phase = frame_phase.to(dtype=torch.float32)
+            angles = 2 * math.pi * phase.unsqueeze(-1) * frequencies
+            phase_features = torch.cat(
+                (phase.unsqueeze(-1), torch.sin(angles), torch.cos(angles)), dim=-1
+            )
+            frame_input = torch.cat(
+                (
+                    base.unsqueeze(1).expand(-1, self.config.num_frames, -1),
+                    phase_features,
+                ),
+                dim=-1,
+            )
+            frame_conditioning = self.action_frame_mlp(frame_input) * self.action_condition_scale
+            return context, frame_conditioning
 
         def forward(
             self,
@@ -336,14 +417,36 @@ if torch is not None and nn is not None:
             *,
             frame_phase: torch.Tensor,
         ) -> torch.Tensor:
-            context = self.action_norm(self.action_embedding(action_indices)).unsqueeze(1)
+            if self.conditioning_mode == "expanded":
+                context, frame_conditioning = self._expanded_action_conditioning(
+                    action_indices, frame_phase
+                )
+            else:
+                context = (
+                    self.action_norm(self.action_embedding(action_indices)).unsqueeze(1)
+                    * self.action_condition_scale
+                )
+                frame_conditioning = None
             return self.dit(
                 video,
                 reference,
                 timesteps,
                 context,
                 frame_phase=frame_phase,
+                frame_conditioning=frame_conditioning,
             )
+
+
+def _build_action_conditioned_motion_model(
+    config: LatentMotionTrainingConfig, action_count: int
+) -> Any:
+    return _ActionConditionedMotionModel(
+        config.model,
+        action_count,
+        conditioning_mode=config.action_conditioning_mode,
+        action_token_count=config.action_token_count,
+        action_condition_scale=config.action_condition_scale,
+    )
 
 
 def build_matched_action_index(
@@ -853,8 +956,8 @@ def evaluate_latent_motion_checkpoint(
     runtime_device = runtime.device(device)
     if runtime_device.type == "cuda" and not runtime.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
-    model = _ActionConditionedMotionModel(
-        checkpoint_config.model, len(corpus.action_vocabulary)
+    model = _build_action_conditioned_motion_model(
+        checkpoint_config, len(corpus.action_vocabulary)
     ).to(runtime_device)
     try:
         model.load_state_dict(checkpoint["ema_model"], strict=True)
@@ -1138,7 +1241,7 @@ def _train(
     runtime.manual_seed(config.seed)
     if device.type == "cuda":
         runtime.cuda.manual_seed_all(config.seed)
-    model = _ActionConditionedMotionModel(config.model, len(corpus.action_vocabulary)).to(device)
+    model = _build_action_conditioned_motion_model(config, len(corpus.action_vocabulary)).to(device)
     ema = copy.deepcopy(model).eval().requires_grad_(False)
     optimizer = runtime.optim.AdamW(
         model.parameters(),
@@ -1186,10 +1289,25 @@ def _train(
             corpus=corpus,
             config=config,
         )
-        model.load_state_dict(parent["ema_model"], strict=True)
-        ema.load_state_dict(parent["ema_model"], strict=True)
+        parent_config = _config_from_dict(parent["config"])
+        _load_warm_start_model_state(
+            model,
+            parent["ema_model"],
+            parent_config=parent_config,
+            current_config=config,
+        )
+        _load_warm_start_model_state(
+            ema,
+            parent["ema_model"],
+            parent_config=parent_config,
+            current_config=config,
+        )
         lineage = {
-            "initialization": "ema_weights_only_fresh_optimizer_and_rng",
+            "initialization": (
+                "ema_weights_plus_new_expanded_action_conditioning"
+                if parent_config.action_conditioning_mode != config.action_conditioning_mode
+                else "ema_weights_only_fresh_optimizer_and_rng"
+            ),
             "parent_checkpoint_path": str(warm_start_checkpoint_path),
             "parent_checkpoint_sha256": expected_warm_start_sha256,
             "parent_step": int(parent["step"]),
@@ -2276,6 +2394,38 @@ def _load_warm_start(
     if not isinstance(value.get("ema_model"), dict):
         raise LatentMotionTrainingError("warm-start EMA state is missing")
     return value
+
+
+def _load_warm_start_model_state(
+    model: Any,
+    state: dict[str, Any],
+    *,
+    parent_config: LatentMotionTrainingConfig,
+    current_config: LatentMotionTrainingConfig,
+) -> None:
+    """Permit only the audited single-token to expanded-action migration."""
+
+    if parent_config.action_conditioning_mode == current_config.action_conditioning_mode:
+        model.load_state_dict(state, strict=True)
+        return
+    if not (
+        parent_config.action_conditioning_mode == "single"
+        and current_config.action_conditioning_mode == "expanded"
+    ):
+        raise LatentMotionTrainingError("unsupported action-conditioning warm start")
+    result = model.load_state_dict(state, strict=False)
+    expected_missing = {
+        "action_frame_mlp.0.bias",
+        "action_frame_mlp.0.weight",
+        "action_frame_mlp.2.bias",
+        "action_frame_mlp.2.weight",
+        "action_token_norm.bias",
+        "action_token_norm.weight",
+        "action_token_projection.bias",
+        "action_token_projection.weight",
+    }
+    if set(result.missing_keys) != expected_missing or result.unexpected_keys:
+        raise LatentMotionTrainingError("expanded action-conditioning warm-start state differs")
 
 
 def _load_array(

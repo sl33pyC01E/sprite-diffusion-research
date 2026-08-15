@@ -10,10 +10,12 @@ from spritelab.latent_motion_train import (
     LatentMotionTrainingError,
     LatentMotionTrainingRow,
     _balanced_pairs_from_index,
+    _build_action_conditioned_motion_model,
     _checkpoint_action_vocabulary,
     _config_from_dict,
     _ema_checkpoint_artifact_kind,
     _ema_update,
+    _load_warm_start_model_state,
     _matched_action_contrast_loss,
     _matched_pixel_action_bundle_loss,
     _matched_pixel_action_contrast_loss,
@@ -169,6 +171,85 @@ def test_pixel_action_bundle_refinement_uses_all_six_actions_together() -> None:
     assert config.gradient_accumulation == 2
     assert config.action_contrast_weight == pytest.approx(0)
     assert config.pixel_action_contrast_weight == pytest.approx(0.5)
+
+
+def test_expanded_bundle_strengthens_action_conditioning() -> None:
+    config = refinement_config("endpoint-expanded-action-bundle3000")
+
+    assert config.action_batch_mode == "bundle"
+    assert config.action_conditioning_mode == "expanded"
+    assert config.action_token_count == 4
+    assert config.action_condition_scale == pytest.approx(2)
+
+
+def test_expanded_action_bundle_projects_four_tokens_and_frame_program() -> None:
+    torch = pytest.importorskip("torch")
+    from spritelab.models.latent_motion_dit import LatentMotionDiTConfig
+
+    config = LatentMotionTrainingConfig(
+        action_batch_mode="bundle",
+        action_conditioning_mode="expanded",
+        action_token_count=4,
+        action_condition_scale=2,
+        model=LatentMotionDiTConfig(
+            latent_size=8,
+            num_frames=2,
+            latent_channels=4,
+            patch_size=2,
+            model_dim=16,
+            depth=1,
+            num_heads=4,
+            condition_dim=12,
+            phase_harmonics=2,
+        ),
+    )
+    model = _build_action_conditioned_motion_model(config, 6)
+    actions = torch.tensor([0, 1])
+    phases = torch.tensor([[0.0, 0.5], [0.25, 0.75]])
+
+    context, frame_program = model._expanded_action_conditioning(actions, phases)
+
+    assert context.shape == (2, 4, 12)
+    assert frame_program.shape == (2, 2, 16)
+    assert not torch.equal(context[0], context[1])
+    assert not torch.equal(frame_program[:, 0], frame_program[:, 1])
+
+
+def test_single_token_checkpoint_migrates_only_into_expanded_conditioning() -> None:
+    torch = pytest.importorskip("torch")
+    from spritelab.models.latent_motion_dit import LatentMotionDiTConfig
+
+    model_config = LatentMotionDiTConfig(
+        latent_size=8,
+        num_frames=2,
+        latent_channels=4,
+        patch_size=2,
+        model_dim=16,
+        depth=1,
+        num_heads=4,
+        condition_dim=12,
+        phase_harmonics=2,
+    )
+    parent_config = LatentMotionTrainingConfig(model=model_config)
+    current_config = LatentMotionTrainingConfig(
+        action_batch_mode="bundle",
+        action_conditioning_mode="expanded",
+        action_token_count=4,
+        action_condition_scale=2,
+        model=model_config,
+    )
+    parent = _build_action_conditioned_motion_model(parent_config, 6)
+    expanded = _build_action_conditioned_motion_model(current_config, 6)
+
+    _load_warm_start_model_state(
+        expanded,
+        parent.state_dict(),
+        parent_config=parent_config,
+        current_config=current_config,
+    )
+
+    assert torch.equal(expanded.action_embedding.weight, parent.action_embedding.weight)
+    assert expanded.action_token_projection.weight.shape == (48, 12)
 
 
 def test_training_times_are_shared_across_a_matched_pair() -> None:

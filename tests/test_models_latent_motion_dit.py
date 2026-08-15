@@ -42,8 +42,17 @@ def test_reference_conditioned_latent_motion_dit_shape_and_reference_path() -> N
     torch.nn.init.normal_(model.final_layer.projection.weight)
     output_a = model(video, reference_a, timestep, condition, frame_phase=phase)
     output_b = model(video, reference_b, timestep, condition, frame_phase=phase)
+    output_conditioned = model(
+        video,
+        reference_a,
+        timestep,
+        condition,
+        frame_phase=phase,
+        frame_conditioning=torch.ones(2, 2, 16),
+    )
     assert output_a.shape == video.shape
     assert not torch.equal(output_a, output_b)
+    assert not torch.equal(output_a, output_conditioned)
 
 
 def test_latent_motion_shape_contract_rejects_wrong_reference_and_phase() -> None:
@@ -59,6 +68,13 @@ def test_latent_motion_shape_contract_rejects_wrong_reference_and_phase() -> Non
             torch.randn(1, 4, 8, 8),
             torch.tensor([0.5]),
             frame_phase=torch.zeros(1, 3),
+        )
+    with pytest.raises(ValueError, match="frame_conditioning"):
+        model(
+            torch.randn(1, 2, 4, 8, 8),
+            torch.randn(1, 4, 8, 8),
+            torch.tensor([0.5]),
+            frame_conditioning=torch.zeros(1, 3, 16),
         )
 
 
