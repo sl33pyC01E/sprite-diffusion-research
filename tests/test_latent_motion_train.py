@@ -26,6 +26,7 @@ from spritelab.latent_motion_train import (
     _sample_training_times,
     _target_distinct_bundles_from_index,
     _target_distinct_pairs_from_index,
+    _time_batch_view,
     build_matched_action_index,
     sample_matched_action_pair,
 )
@@ -189,6 +190,18 @@ def test_training_times_are_shared_across_a_matched_pair() -> None:
     assert times.shape == (2,)
     assert times[0].item() == pytest.approx(times[1].item())
     assert 0 <= times[0].item() < 1
+
+
+def test_flow_time_view_supports_six_action_bundle() -> None:
+    torch = pytest.importorskip("torch")
+    times = torch.arange(6, dtype=torch.float32)
+
+    viewed = _time_batch_view(times, batch=6)
+
+    assert viewed.shape == (6, 1, 1, 1, 1)
+    assert torch.equal(viewed[:, 0, 0, 0, 0], times)
+    with pytest.raises(ValueError, match="shape"):
+        _time_batch_view(times[:2], batch=6)
 
 
 @pytest.mark.parametrize("algorithm", ["euler", "heun"])

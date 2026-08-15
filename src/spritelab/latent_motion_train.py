@@ -452,6 +452,14 @@ def _sample_training_times(
     return sampled.expand(batch)
 
 
+def _time_batch_view(times: Any, *, batch: int) -> Any:
+    """Broadcast scalar flow times across a variable-size action batch."""
+
+    if tuple(times.shape) != (batch,):
+        raise ValueError(f"times must have shape {(batch,)!r}")
+    return times.view(batch, 1, 1, 1, 1)
+
+
 def _sample_motion_residual(
     runtime: Any,
     model: Any,
@@ -1231,7 +1239,7 @@ def _train(
                 device=device,
                 generator=noise_generator,
             )
-            time_view = times.view(2, 1, 1, 1, 1)
+            time_view = _time_batch_view(times, batch=len(selection))
             noisy = (1 - time_view) * clean + time_view * shared_noise
             with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
                 predicted = model(
