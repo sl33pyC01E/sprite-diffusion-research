@@ -23,6 +23,8 @@ from spritelab.latent_keypose_train import (  # noqa: E402
     _keypose_batch,
     _keypose_bundle_metrics,
     _keypose_prediction_contract,
+    _validate,
+    build_keypose_action_bundles,
 )
 from spritelab.latent_motion_train import (  # noqa: E402
     _load_frozen_decoder,
@@ -100,8 +102,11 @@ def main() -> None:
     parser.add_argument("--expected-checkpoint-sha256", required=True)
     parser.add_argument("--selection-report", type=Path, required=True)
     parser.add_argument("--state", choices=("ema", "raw"), default="ema")
+    parser.add_argument("--aggregate-identities", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.aggregate_identities < 0:
+        raise ValueError("aggregate identities cannot be negative")
 
     checkpoint_path = args.checkpoint.resolve()
     checkpoint_sha = _sha256(checkpoint_path)
@@ -224,6 +229,47 @@ def main() -> None:
         "selection_report_path": str(selection_report_path),
         "selection_report_sha256": _sha256(selection_report_path),
     }
+    if args.aggregate_identities:
+        train_bundles = build_keypose_action_bundles(corpus, corpus.train_indices)[
+            : args.aggregate_identities
+        ]
+        validation_bundles = build_keypose_action_bundles(corpus, corpus.validation_indices)[
+            : args.aggregate_identities
+        ]
+        report["aggregate_metrics"] = {
+            "training": {
+                "identity_count": len(train_bundles),
+                "metrics": _validate(
+                    torch,
+                    corpus,
+                    train_bundles,
+                    model,
+                    decoder,
+                    config=config,
+                    device=torch.device("cpu"),
+                    dtype=torch.float32,
+                    autocast=False,
+                    mean=mean,
+                    std=std,
+                ),
+            },
+            "validation": {
+                "identity_count": len(validation_bundles),
+                "metrics": _validate(
+                    torch,
+                    corpus,
+                    validation_bundles,
+                    model,
+                    decoder,
+                    config=config,
+                    device=torch.device("cpu"),
+                    dtype=torch.float32,
+                    autocast=False,
+                    mean=mean,
+                    std=std,
+                ),
+            },
+        }
     (output / "report.json").write_bytes(canonical_json_bytes(report))
     print(
         json.dumps(
