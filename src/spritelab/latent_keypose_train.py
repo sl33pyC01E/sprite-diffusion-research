@@ -38,6 +38,7 @@ else:
     _TORCH_IMPORT_ERROR = None
 
 Precision = Literal["float32", "bfloat16"]
+KeyposePredictionMode = Literal["endpoint_flow", "direct_residual"]
 
 
 class LatentKeyposeTrainingError(ValueError):
@@ -49,6 +50,7 @@ class LatentKeyposeTrainingConfig:
     """Training contract for reference sprite + verb -> canonical middle pose."""
 
     keypose_frame_index: int = 4
+    prediction_mode: KeyposePredictionMode = "endpoint_flow"
     gradient_accumulation: int = 2
     learning_rate: float = 1e-4
     minimum_learning_rate: float = 1e-5
@@ -136,6 +138,8 @@ class LatentKeyposeTrainingConfig:
             raise ValueError("device must be cpu or cuda")
         if self.precision not in {"float32", "bfloat16"}:
             raise ValueError("precision must be float32 or bfloat16")
+        if self.prediction_mode not in {"endpoint_flow", "direct_residual"}:
+            raise ValueError("prediction_mode must be endpoint_flow or direct_residual")
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +258,24 @@ def _keypose_bundle_metrics(runtime: Any, *, predicted_rgba: Any, target_rgba: A
         "premultiplied_rgba_mae": runtime.nn.functional.l1_loss(predicted_pm, target_pm),
         "target_action_separation": target_distances.mean(),
     }
+
+
+def _keypose_prediction_contract(
+    runtime: Any,
+    *,
+    clean_residual: Any,
+    noise: Any,
+    prediction_mode: KeyposePredictionMode,
+) -> tuple[Any, Any]:
+    """Return model input and supervised prediction for one key-pose mode."""
+
+    if tuple(noise.shape) != tuple(clean_residual.shape):
+        raise ValueError("key-pose noise and clean residual must share one shape")
+    if prediction_mode == "endpoint_flow":
+        return noise, noise - clean_residual
+    if prediction_mode == "direct_residual":
+        return runtime.zeros_like(clean_residual), -clean_residual
+    raise ValueError("prediction_mode must be endpoint_flow or direct_residual")
 
 
 def _pixel_action_bundle_loss(runtime: Any, *, predicted_rgba: Any, target_rgba: Any) -> Any:
@@ -431,20 +453,25 @@ def _train(
             shared_noise = runtime.randn(
                 (1, *clean.shape[1:]), device=device, generator=noise_generator
             ).expand_as(clean)
+            model_input, prediction_target = _keypose_prediction_contract(
+                runtime,
+                clean_residual=clean,
+                noise=shared_noise,
+                prediction_mode=config.prediction_mode,
+            )
             times = runtime.ones((len(selection),), device=device)
-            noisy = shared_noise.unsqueeze(1)
             with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
                 predicted = model(
-                    noisy,
+                    model_input.unsqueeze(1),
                     reference,
                     times,
                     actions,
                     frame_phase=phases,
                 )[:, 0]
                 latent_loss = runtime.nn.functional.mse_loss(
-                    predicted.float(), (shared_noise - clean).float()
+                    predicted.float(), prediction_target.float()
                 )
-                generated_residual = shared_noise - predicted
+                generated_residual = model_input - predicted
                 generated_latent = (reference + generated_residual) * std + mean
                 logits = decoder.decode_logits(generated_latent)
                 pixel_loss = sprite_reconstruction_loss(logits, target_rgba).total
@@ -579,21 +606,31 @@ def _validate(
             noise = runtime.randn(
                 (1, *clean.shape[1:]), device=device, generator=generator
             ).expand_as(clean)
+            model_input, prediction_target = _keypose_prediction_contract(
+                runtime,
+                clean_residual=clean,
+                noise=noise,
+                prediction_mode=config.prediction_mode,
+            )
             times = runtime.ones((len(selection),), device=device)
             with runtime.autocast(device_type=device.type, dtype=dtype, enabled=autocast):
-                velocity = model(noise.unsqueeze(1), reference, times, actions, frame_phase=phases)[
-                    :, 0
-                ]
+                velocity = model(
+                    model_input.unsqueeze(1),
+                    reference,
+                    times,
+                    actions,
+                    frame_phase=phases,
+                )[:, 0]
                 shifted_actions = runtime.roll(actions, 1)
                 shifted_velocity = model(
-                    noise.unsqueeze(1),
+                    model_input.unsqueeze(1),
                     reference,
                     times,
                     shifted_actions,
                     frame_phase=phases,
                 )[:, 0]
-                generated = (reference + noise - velocity) * std + mean
-                shifted = (reference + noise - shifted_velocity) * std + mean
+                generated = (reference + model_input - velocity) * std + mean
+                shifted = (reference + model_input - shifted_velocity) * std + mean
                 decoded = runtime.sigmoid(decoder.decode_logits(generated)).reshape(
                     len(selection), 1, 4, 128, 128
                 )
@@ -614,8 +651,8 @@ def _validate(
                 (after < before).to(runtime.float32).mean()
             )
             metrics["action_token_endpoint_loss_delta"] = runtime.nn.functional.mse_loss(
-                shifted_velocity.float(), (noise - clean).float()
-            ) - runtime.nn.functional.mse_loss(velocity.float(), (noise - clean).float())
+                shifted_velocity.float(), prediction_target.float()
+            ) - runtime.nn.functional.mse_loss(velocity.float(), prediction_target.float())
             for key, value in metrics.items():
                 totals[key] = totals.get(key, 0.0) + float(value.cpu())
     model.train()

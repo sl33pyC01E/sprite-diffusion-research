@@ -32,6 +32,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--profile",
+        choices=("endpoint30000", "direct30000"),
+        default="direct30000",
+    )
     parser.add_argument("--resume-checkpoint", type=Path)
     parser.add_argument("--expected-resume-sha256")
     parser.add_argument("--preflight-only", action="store_true")
@@ -41,7 +46,9 @@ def main() -> None:
     output = args.output.resolve()
     if output.exists():
         raise FileExistsError(f"Refusing to replace key-pose output: {output}")
-    config = LatentKeyposeTrainingConfig()
+    config = LatentKeyposeTrainingConfig(
+        prediction_mode=("direct_residual" if args.profile == "direct30000" else "endpoint_flow")
+    )
     corpus = load_latent_motion_training_corpus(
         args.manifest, verify_hashes=True, array_loading="lazy"
     )

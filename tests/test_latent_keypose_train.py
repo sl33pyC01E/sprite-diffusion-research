@@ -10,6 +10,7 @@ from spritelab.latent_keypose_train import (
     _build_keypose_model,
     _keypose_batch,
     _keypose_bundle_metrics,
+    _keypose_prediction_contract,
     _pixel_action_bundle_loss,
     build_keypose_action_bundles,
 )
@@ -36,9 +37,35 @@ def test_keypose_config_fixes_one_model_frame_at_source_frame_four() -> None:
     assert config.model.num_frames == 1
     assert config.action_token_count == 4
     assert config.action_condition_scale == pytest.approx(2)
+    assert config.prediction_mode == "endpoint_flow"
 
     with pytest.raises(ValueError, match="exactly one frame"):
         LatentKeyposeTrainingConfig(model=LatentMotionDiTConfig(num_frames=2, patch_size=4))
+
+
+def test_direct_keypose_contract_removes_unnecessary_noise_prediction() -> None:
+    torch = pytest.importorskip("torch")
+    clean = torch.tensor((1.0, 2.0, 3.0))
+    noise = torch.tensor((4.0, 5.0, 6.0))
+
+    endpoint_input, endpoint_target = _keypose_prediction_contract(
+        torch,
+        clean_residual=clean,
+        noise=noise,
+        prediction_mode="endpoint_flow",
+    )
+    direct_input, direct_target = _keypose_prediction_contract(
+        torch,
+        clean_residual=clean,
+        noise=noise,
+        prediction_mode="direct_residual",
+    )
+
+    assert torch.equal(endpoint_input, noise)
+    assert torch.equal(endpoint_target, noise - clean)
+    assert torch.equal(direct_input, torch.zeros_like(clean))
+    assert torch.equal(direct_target, -clean)
+    assert torch.equal(direct_input - direct_target, clean)
 
 
 def test_keypose_action_bundles_require_all_six_actions() -> None:
