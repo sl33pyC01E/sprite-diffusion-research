@@ -26,6 +26,7 @@ from spritelab.latent_motion_train import (
     _sample_target_distinct_bundle,
     _sample_target_distinct_pair,
     _sample_training_times,
+    _target_directed_motion_floor_loss,
     _target_distinct_bundles_from_index,
     _target_distinct_pairs_from_index,
     _temporal_motion_anti_collapse_loss,
@@ -191,6 +192,18 @@ def test_motion_enforced_profile_makes_static_averaging_expensive() -> None:
     assert config.action_conditioning_mode == "expanded"
     assert config.pixel_action_contrast_weight == pytest.approx(0.5)
     assert config.temporal_motion_weight == pytest.approx(2)
+
+
+def test_target_motion_floor_profile_uses_target_directed_constraint() -> None:
+    config = refinement_config("endpoint-target-motion-floor45000")
+
+    assert config.steps == 45_000
+    assert config.action_batch_mode == "bundle"
+    assert config.action_conditioning_mode == "expanded"
+    assert config.pixel_action_contrast_weight == pytest.approx(0.5)
+    assert config.temporal_motion_weight == pytest.approx(0)
+    assert config.target_directed_motion_weight == pytest.approx(8)
+    assert config.minimum_target_motion_progress == pytest.approx(0.8)
 
 
 def test_expanded_action_bundle_projects_four_tokens_and_frame_program() -> None:
@@ -535,6 +548,88 @@ def test_temporal_motion_loss_rejects_shape_mismatch() -> None:
 
     with pytest.raises(ValueError, match="share one shape"):
         _temporal_motion_anti_collapse_loss(torch, predicted_rgba=target[:1], target_rgba=target)
+
+
+def test_target_directed_motion_floor_rejects_static_average_and_unrelated_jitter() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((1, 3, 4, 3, 3))
+    target[:, 0, 0, 0, 0] = 1
+    target[:, 0, 3, 0, 0] = 1
+    target[:, 1, 0, 1, 1] = 1
+    target[:, 1, 3, 1, 1] = 1
+    target[:, 2, 0, 2, 2] = 1
+    target[:, 2, 3, 2, 2] = 1
+    static = target[:, :1].expand_as(target).clone().requires_grad_(True)
+    unrelated = static.detach().clone()
+    unrelated[:, 1, 1, 0, 2] = 1
+    unrelated[:, 2, 1, 0, 1] = 1
+
+    exact_loss = _target_directed_motion_floor_loss(
+        torch, predicted_rgba=target, target_rgba=target, minimum_progress=0.8
+    )
+    static_loss = _target_directed_motion_floor_loss(
+        torch, predicted_rgba=static, target_rgba=target, minimum_progress=0.8
+    )
+    unrelated_loss = _target_directed_motion_floor_loss(
+        torch, predicted_rgba=unrelated, target_rgba=target, minimum_progress=0.8
+    )
+
+    assert exact_loss.item() == pytest.approx(0)
+    assert static_loss.item() == pytest.approx(0.8)
+    assert unrelated_loss.item() == pytest.approx(static_loss.item())
+    static_loss.backward()
+    assert static.grad is not None
+    assert torch.isfinite(static.grad).all()
+    assert static.grad.abs().sum().item() > 0
+
+
+def test_target_directed_motion_floor_gradient_improves_static_prediction() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((1, 2, 4, 2, 2))
+    target[:, 0, 0, 0, 0] = 1
+    target[:, 0, 3, 0, 0] = 1
+    target[:, 1, 0, 1, 1] = 1
+    target[:, 1, 3, 1, 1] = 1
+    predicted = target[:, :1].expand_as(target).clone().requires_grad_(True)
+    loss = _target_directed_motion_floor_loss(
+        torch, predicted_rgba=predicted, target_rgba=target, minimum_progress=0.8
+    )
+    gradient = torch.autograd.grad(loss, predicted)[0]
+
+    improved = (predicted.detach() - 0.01 * gradient).clamp(0, 1)
+    improved_loss = _target_directed_motion_floor_loss(
+        torch, predicted_rgba=improved, target_rgba=target, minimum_progress=0.8
+    )
+
+    assert improved_loss.item() < loss.item()
+
+
+def test_target_directed_motion_floor_ignores_static_target_and_validates_contract() -> None:
+    torch = pytest.importorskip("torch")
+    target = torch.zeros((1, 2, 4, 2, 2))
+    prediction = torch.rand_like(target, requires_grad=True)
+
+    loss = _target_directed_motion_floor_loss(
+        torch, predicted_rgba=prediction, target_rgba=target, minimum_progress=0.8
+    )
+    assert loss.item() == pytest.approx(0)
+    loss.backward()
+    assert prediction.grad is not None
+
+    with pytest.raises(ValueError, match="share one shape"):
+        _target_directed_motion_floor_loss(
+            torch,
+            predicted_rgba=prediction[:0],
+            target_rgba=target,
+            minimum_progress=0.8,
+        )
+    with pytest.raises(ValueError, match="minimum_progress"):
+        _target_directed_motion_floor_loss(
+            torch,
+            predicted_rgba=prediction,
+            target_rgba=target,
+            minimum_progress=0,
+        )
 
 
 def test_paired_appearance_metrics_separate_sprite_and_canvas_error() -> None:

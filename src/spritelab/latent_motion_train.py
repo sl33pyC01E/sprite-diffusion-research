@@ -72,6 +72,8 @@ class LatentMotionTrainingConfig:
     action_contrast_weight: float = 0.0
     pixel_action_contrast_weight: float = 0.0
     temporal_motion_weight: float = 0.0
+    target_directed_motion_weight: float = 0.0
+    minimum_target_motion_progress: float = 0.8
     action_batch_mode: ActionBatchMode = "pair"
     action_conditioning_mode: ActionConditioningMode = "single"
     action_token_count: int = 1
@@ -134,6 +136,7 @@ class LatentMotionTrainingConfig:
             "action_contrast_weight",
             "pixel_action_contrast_weight",
             "temporal_motion_weight",
+            "target_directed_motion_weight",
             "endpoint_sample_probability",
         ):
             value = getattr(self, name)
@@ -145,6 +148,11 @@ class LatentMotionTrainingConfig:
             raise ValueError("at least one denoising objective must be positive")
         if self.endpoint_sample_probability > 1:
             raise ValueError("endpoint_sample_probability must be in [0,1]")
+        if (
+            not math.isfinite(self.minimum_target_motion_progress)
+            or not 0 < self.minimum_target_motion_progress <= 1
+        ):
+            raise ValueError("minimum_target_motion_progress must be in (0,1]")
         if self.time_sampling not in {"endpoint", "uniform"}:
             raise ValueError("time_sampling must be endpoint or uniform")
         if self.action_batch_mode not in {"pair", "bundle"}:
@@ -1339,6 +1347,7 @@ def _train(
         accumulated_action_contrast = 0.0
         accumulated_pixel_action_contrast = 0.0
         accumulated_temporal_motion = 0.0
+        accumulated_target_directed_motion = 0.0
         accumulated_loss = 0.0
         for _ in range(config.gradient_accumulation):
             selection = (
@@ -1414,12 +1423,23 @@ def _train(
                     if config.temporal_motion_weight
                     else latent_loss.new_zeros(())
                 )
+                target_directed_motion_loss = (
+                    _target_directed_motion_floor_loss(
+                        runtime,
+                        predicted_rgba=predicted_rgba,
+                        target_rgba=target_rgba_5d,
+                        minimum_progress=config.minimum_target_motion_progress,
+                    )
+                    if config.target_directed_motion_weight
+                    else latent_loss.new_zeros(())
+                )
                 loss = (
                     config.latent_endpoint_weight * latent_loss
                     + config.pixel_endpoint_weight * pixel_loss
                     + config.action_contrast_weight * action_contrast_loss
                     + config.pixel_action_contrast_weight * pixel_action_contrast_loss
                     + config.temporal_motion_weight * temporal_motion_loss
+                    + config.target_directed_motion_weight * target_directed_motion_loss
                 )
                 scaled = loss / config.gradient_accumulation
             if not bool(runtime.isfinite(scaled)):
@@ -1430,6 +1450,7 @@ def _train(
             accumulated_action_contrast += float(action_contrast_loss.detach().cpu())
             accumulated_pixel_action_contrast += float(pixel_action_contrast_loss.detach().cpu())
             accumulated_temporal_motion += float(temporal_motion_loss.detach().cpu())
+            accumulated_target_directed_motion += float(target_directed_motion_loss.detach().cpu())
             accumulated_loss += float(loss.detach().cpu())
         gradient_norm = float(
             runtime.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
@@ -1474,6 +1495,9 @@ def _train(
                 ),
                 "temporal_motion_loss": (
                     accumulated_temporal_motion / config.gradient_accumulation
+                ),
+                "target_directed_motion_loss": (
+                    accumulated_target_directed_motion / config.gradient_accumulation
                 ),
                 "step": step,
                 "validation": latest_validation
@@ -2104,6 +2128,50 @@ def _temporal_motion_anti_collapse_loss(
     predicted_magnitude = predicted_delta.abs().mean(dim=(1, 2, 3, 4))
     motion_shortfall = runtime.relu(target_magnitude - predicted_magnitude) / target_magnitude
     return (normalized_delta_error + motion_shortfall).mean()
+
+
+def _target_directed_motion_floor_loss(
+    runtime: Any,
+    *,
+    predicted_rgba: Any,
+    target_rgba: Any,
+    minimum_progress: float,
+) -> Any:
+    """Require signed progress along every authored non-static frame transition.
+
+    A static prediction has zero progress, the exact target has progress one, and
+    unrelated motion does not satisfy the floor. Unlike an absolute-motion hinge,
+    this objective has a useful target-directed gradient even at a perfectly static
+    prediction.
+    """
+
+    expected = tuple(target_rgba.shape)
+    if len(expected) != 5 or expected[1] < 2 or expected[2] != 4:
+        raise ValueError("target-directed motion tensors must have shape [B,T>=2,4,H,W]")
+    if tuple(predicted_rgba.shape) != expected:
+        raise ValueError("target-directed motion tensors must share one shape")
+    if not math.isfinite(minimum_progress) or not 0 < minimum_progress <= 1:
+        raise ValueError("minimum_progress must be in (0,1]")
+
+    predicted_alpha = predicted_rgba[:, :, 3:4]
+    target_alpha = target_rgba[:, :, 3:4]
+    predicted_pm = runtime.cat((predicted_rgba[:, :, :3] * predicted_alpha, predicted_alpha), dim=2)
+    target_pm = runtime.cat((target_rgba[:, :, :3] * target_alpha, target_alpha), dim=2)
+    predicted_delta = predicted_pm[:, 1:] - predicted_pm[:, :-1]
+    target_delta = target_pm[:, 1:] - target_pm[:, :-1]
+    target_magnitude = target_delta.abs().mean(dim=(2, 3, 4))
+    dynamic = target_magnitude > 1e-4
+    if not bool(dynamic.any()):
+        return predicted_rgba.sum() * 0
+
+    change_strength = target_delta.abs().amax(dim=2, keepdim=True)
+    change_weight = 1 + 8 * change_strength
+    weighted_target_magnitude = (target_delta.abs() * change_weight).sum(dim=(2, 3, 4))
+    directed_progress = (predicted_delta * target_delta.sign() * change_weight).sum(
+        dim=(2, 3, 4)
+    ) / weighted_target_magnitude.clamp_min(1e-8)
+    shortfall = runtime.relu(minimum_progress - directed_progress)
+    return shortfall[dynamic].mean()
 
 
 def _paired_appearance_metrics(
